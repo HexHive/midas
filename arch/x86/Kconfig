@@ -1992,6 +1992,14 @@ config EFI_MIXED
 
 	   If unsure, say N.
 
+config TOCTTOU_PROTECTION
+	def_bool y
+	select INTERVAL_TREE
+	prompt "Time-of-check to time-of-use protection for system call arguments"
+	depends on X86_64
+	---help---
+		EPFL experimental feature. Lorem ipsum dolor sit amet.
+		
 source "kernel/Kconfig.hz"
 
 config KEXEC
