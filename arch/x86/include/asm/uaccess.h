@@ -152,8 +152,12 @@ extern int __get_user_bad(void);
  * Return: zero on success, or -EFAULT on error.
  * On error, the variable @x is set to zero.
  */
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/* TOCTTOU-safe version uses generic copy_{to,from}_user */
+#define get_user(x, ptr) (copy_from_user(&x, ptr, sizeof(x)) == 0 ? 0 : -EFAULT)
+#else /* CONFIG_TOCTTOU_PROTECTION */
 #define get_user(x,ptr) ({ might_fault(); do_get_user_call(get_user,x,ptr); })
-
+#endif
 /**
  * __get_user - Get a simple variable from user space, with less checking.
  * @x:   Variable to store result.
@@ -175,8 +179,12 @@ extern int __get_user_bad(void);
  * Return: zero on success, or -EFAULT on error.
  * On error, the variable @x is set to zero.
  */
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/* TOCTTOU-safe version uses generic copy_{to,from}_user */
+#define __get_user(x,ptr) get_user(x,ptr)
+#else /* CONFIG_TOCTTOU_PROTECTION */
 #define __get_user(x,ptr) do_get_user_call(get_user_nocheck,x,ptr)
-
+#endif
 
 #ifdef CONFIG_X86_32
 #define __put_user_goto_u64(x, addr, label)			\
@@ -249,7 +257,12 @@ extern void __put_user_nocheck_8(void);
  *
  * Return: zero on success, or -EFAULT on error.
  */
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/* TOCTTOU-safe version uses generic copy_{to,from}_user */
+#define put_user(x, ptr) (copy_to_user(&x, ptr, sizeof(x)) == 0 ? 0 : -EFAULT)
+#else /* CONFIG_TOCTTOU_PROTECTION */
 #define put_user(x, ptr) ({ might_fault(); do_put_user_call(put_user,x,ptr); })
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 /**
  * __put_user - Write a simple value into user space, with less checking.
@@ -271,7 +284,12 @@ extern void __put_user_nocheck_8(void);
  *
  * Return: zero on success, or -EFAULT on error.
  */
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/* TOCTTOU-safe version uses generic copy_{to,from}_user */
+#define __put_user(x, ptr) put_user(x, ptr)
+#else /* CONFIG_TOCTTOU_PROTECTION */
 #define __put_user(x, ptr) do_put_user_call(put_user_nocheck,x,ptr)
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 #define __put_user_size(x, ptr, size, label)				\
 do {									\
