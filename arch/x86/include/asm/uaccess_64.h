@@ -46,26 +46,34 @@ copy_user_generic(void *to, const void *from, unsigned len)
 	return ret;
 }
 
+/* The erstwhile/baseline raw_copy_{to,from}_user becomes __raw_copy_{to,from}_user.
+ * The new raw_copy_{to,from}_user acts as a wrapper which handles page marking,
+ * using __raw_copy_{to,from}_user for actually moving data.
+ */
+#ifdef CONFIG_TOCTTOU_PROTECTION
+extern __must_check unsigned long
+raw_copy_from_user(void *dst, const void __user *src, unsigned long size)
+
+static __always_inline __must_check unsigned long
+__raw_copy_from_user(void *dst, const void __user *src, unsigned long size)
+#else /* CONFIG_TOCTTOU_PROTECTION */
 static __always_inline __must_check unsigned long
 raw_copy_from_user(void *dst, const void __user *src, unsigned long size)
+#endif /* CONFIG_TOCTTOU_PROTECTION */ 
 {
 	return copy_user_generic(dst, (__force void *)src, size);
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-/* The erstwhile/baseline raw_copy_to_user becomes __raw_copy_to_user.
- * The new raw_copy_to_user acts as a wrapper which handles page marking,
- * using __raw_copy_to_user for actually moving data.
- */
 extern __must_check unsigned long
 raw_copy_to_user(void __user *dst, const void *src, unsigned long size);
 
 static __always_inline __must_check unsigned long
 __raw_copy_to_user(void __user *dst, const void *src, unsigned long size)
-#else
+#else /* CONFIG_TOCTTOU_PROTECTION */
 static __always_inline __must_check unsigned long
 raw_copy_to_user(void __user *dst, const void *src, unsigned long size)
-#endif
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 {
 	return copy_user_generic((__force void *)dst, src, size);
 }
