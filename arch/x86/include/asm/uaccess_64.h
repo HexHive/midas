@@ -52,7 +52,7 @@ copy_user_generic(void *to, const void *from, unsigned len)
  */
 #ifdef CONFIG_TOCTTOU_PROTECTION
 extern __must_check unsigned long
-raw_copy_from_user(void *dst, const void __user *src, unsigned long size)
+raw_copy_from_user(void *dst, const void __user *src, unsigned long size);
 
 static __always_inline __must_check unsigned long
 __raw_copy_from_user(void *dst, const void __user *src, unsigned long size)
