@@ -1102,7 +1102,7 @@ sg_ioctl_common(struct file *filp, Sg_device *sdp, Sg_fd *sfp,
 	case SG_EMULATED_HOST:
 		if (atomic_read(&sdp->detaching))
 			return -ENODEV;
-		return put_user(sdp->device->host->hostt->emulated, ip);
+		return put_user((int)sdp->device->host->hostt->emulated, ip);
 	case SCSI_IOCTL_SEND_COMMAND:
 		if (atomic_read(&sdp->detaching))
 			return -ENODEV;

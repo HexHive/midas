@@ -2438,7 +2438,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		walk_process_tree(me, propagate_has_child_subreaper, NULL);
 		break;
 	case PR_GET_CHILD_SUBREAPER:
-		error = put_user(me->signal->is_child_subreaper,
+		error = put_user((int)me->signal->is_child_subreaper,
 				 (int __user *)arg2);
 		break;
 	case PR_SET_NO_NEW_PRIVS:
