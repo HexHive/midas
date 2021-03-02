@@ -1368,6 +1368,11 @@ struct task_struct {
 	struct llist_head               kretprobe_instances;
 #endif
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+// The metadata structures needed for each thread and locks for them
+	long op_code;
+#endif
+
 	/*
 	 * New fields for task_struct should be added above here, so that
 	 * they are included in the randomized portion of task_struct.

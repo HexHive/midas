@@ -40,6 +40,13 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
 	nr = syscall_enter_from_user_mode(regs, nr);
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+// Set the initial state of the variables. We may not be in a syscall that marks
+// pages. Remember in which call we are in.
+	// current->tocttou_syscall = 0;
+	current->op_code = nr;
+#endif 
+
 	instrumentation_begin();
 	if (likely(nr < NR_syscalls)) {
 		nr = array_index_nospec(nr, NR_syscalls);
@@ -54,6 +61,13 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	}
 	instrumentation_end();
 	syscall_exit_to_user_mode(regs);
+
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+// Reset the system call information
+	// current->tocttou_syscall = 0;
+	current->op_code = -1;
+#endif
 }
 #endif
 
