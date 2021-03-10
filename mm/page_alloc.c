@@ -2318,6 +2318,11 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 		set_page_pfmemalloc(page);
 	else
 		clear_page_pfmemalloc(page);
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	INIT_LIST_HEAD(&page->versions);
+#endif
+
 }
 
 /*

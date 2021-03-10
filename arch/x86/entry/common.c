@@ -38,13 +38,18 @@
 #ifdef CONFIG_X86_64
 __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	struct marked_frame *marked_frame, *next;
+	struct page_version *version;
+#endif
 	nr = syscall_enter_from_user_mode(regs, nr);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-// Set the initial state of the variables. We may not be in a syscall that marks
-// pages. Remember in which call we are in.
+	/* Set the initial state of the variables. We may not be in a syscall that marks
+	   pages. Remember in which call we are in. */
 	// current->tocttou_syscall = 0;
 	current->op_code = nr;
+	INIT_LIST_HEAD(&current->marked_frames);
 #endif 
 
 	instrumentation_begin();
@@ -64,7 +69,27 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-// Reset the system call information
+
+	/* Reset the system call information */	
+	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
+		/* Find and delete version */
+		list_for_each_entry(version, &marked_frame->pframe->versions, other_nodes) {
+			if(version->task == current)
+				break;
+		}
+		BUG_ON(version == NULL);
+
+		list_del(&version->other_nodes);
+		kfree(version);
+
+		/* Release frame for marked, duplicated pages */
+		if(version->pframe)
+			__free_page(version->pframe);
+
+		list_del(&marked_frame->other_nodes);
+		kfree(marked_frame);
+	}
+
 	// current->tocttou_syscall = 0;
 	current->op_code = -1;
 #endif

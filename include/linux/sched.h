@@ -646,6 +646,13 @@ struct kmap_ctrl {
 #endif
 };
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+struct marked_frame {
+	struct page *pframe;
+	struct list_head other_nodes;
+};
+#endif
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -1369,8 +1376,9 @@ struct task_struct {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-// The metadata structures needed for each thread and locks for them
+	/* The metadata structures needed for each thread and locks for them */
 	long op_code;
+	struct list_head marked_frames;
 #endif
 
 	/*

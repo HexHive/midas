@@ -66,6 +66,16 @@ struct mem_cgroup;
 #define _struct_page_alignment
 #endif
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+struct page;
+struct page_version {
+	struct task_struct *task; 	/* Identify the thread for which we keep this version */
+	struct page *pframe;					/* Actual frame holding the version */
+	struct list_head other_nodes;	
+};
+
+#endif /* CONFIG_TOCTTOU_PROTECTION */
+
 struct page {
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
@@ -221,6 +231,10 @@ struct page {
 #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
 	int _last_cpupid;
 #endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	struct list_head versions;
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 } _struct_page_alignment;
 
 static inline atomic_t *compound_mapcount_ptr(struct page *page)
