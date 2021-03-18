@@ -163,4 +163,11 @@ extern unsigned int ptrs_per_p4d;
 
 #define PGD_KERNEL_START	((PAGE_SIZE / 2) / sizeof(pgd_t))
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/* The old write permissions of the page */
+#define _PAGE_TOCTTOU_OLD (_AT(pteval_t, 1) << _PAGE_BIT_TOCTTOU_OLD)
+/* Is the page marked? */
+#define _PAGE_TOCTTOU_MARKED (_AT(pteval_t, 1) << _PAGE_BIT_TOCTTOU_MARKED)
+#endif
+
 #endif /* _ASM_X86_PGTABLE_64_DEFS_H */

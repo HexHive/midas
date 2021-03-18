@@ -569,6 +569,63 @@ static inline pud_t pud_clear_soft_dirty(pud_t pud)
 
 #endif /* CONFIG_HAVE_ARCH_SOFT_DIRTY */
 
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+/* Auxiliary functions used to manipulate PTE */
+static inline int pte_rmarked(pte_t pte)
+{
+	return pte_flags(pte) & _PAGE_TOCTTOU_MARKED;
+}
+
+static inline int pte_savedwrite(pte_t pte)
+{
+	return pte_flags(pte) & _PAGE_TOCTTOU_OLD;
+}
+
+/* Helper functions to manipulate PTEs */
+static inline pte_t pte_rmark(pte_t pte)
+{
+	pte_t temp = pte_set_flags(pte, _PAGE_TOCTTOU_MARKED);
+	temp = pte_clear_flags(temp, _PAGE_TOCTTOU_OLD);
+
+	if (pte_write(pte)) {
+		temp = pte_set_flags(temp, _PAGE_TOCTTOU_OLD);
+		temp = pte_clear_flags(temp, _PAGE_RW);
+	}
+
+	return temp;
+}
+
+static inline pte_t pte_runmark(pte_t pte)
+{
+	if (pte_rmarked(pte)) {
+		int writable = pte_flags(pte) & _PAGE_TOCTTOU_OLD;
+		pte = pte_clear_flags(pte, _PAGE_TOCTTOU_MARKED | _PAGE_TOCTTOU_OLD);
+
+		if (writable)
+			pte = pte_set_flags(pte, _PAGE_RW);
+	}
+
+	return pte;
+}
+
+static inline int pte_rmarked_write(pte_t pte)
+{
+	if (!pte_rmarked(pte)) return 0;
+
+	return pte_flags(pte) & _PAGE_TOCTTOU_OLD;
+}
+
+static inline pte_t pte_preserve_tocttou(pte_t oldpte, pte_t ptent)
+{
+	if (pte_rmarked(oldpte)) {
+		pte_rmark(ptent);
+	}
+
+	return ptent;
+}
+#endif /* CONFIG_TOCTTOU_PROTECTION */
+
 /*
  * Mask out unsupported bits in a present pgprot.  Non-present pgprots
  * can use those bits for other purposes, so leave them be.
