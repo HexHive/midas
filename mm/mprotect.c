@@ -456,6 +456,8 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
 			   vma->anon_vma, vma->vm_file, pgoff, vma_policy(vma),
 			   vma->vm_userfaultfd_ctx);
 	if (*pprev) {
+		//TODO:Atri VMA merge needs to also move marked_pages
+		BUG();
 		vma = *pprev;
 		VM_WARN_ON((vma->vm_flags ^ newflags) & ~VM_SOFTDIRTY);
 		goto success;
