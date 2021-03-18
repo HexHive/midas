@@ -10,6 +10,11 @@
 
 #include <asm/uaccess.h>
 
+#ifdef CONFIG_TOCTTOU_PROTECTION 
+#undef INLINE_COPY_TO_USER
+#undef INLINE_COPY_FROM_USER
+#endif 
+
 #ifdef CONFIG_SET_FS
 /*
  * Force the uaccess routines to be wired up for actual userspace access,
@@ -147,6 +152,10 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 	check_object_size(from, n, true);
 	return raw_copy_to_user(to, from, n);
 }
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+void syscall_marking_cleanup(void);
+#endif
 
 #ifdef INLINE_COPY_FROM_USER
 static inline __must_check unsigned long

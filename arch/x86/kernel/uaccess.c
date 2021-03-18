@@ -1,6 +1,10 @@
 #include <linux/mm.h>
+#include <linux/rmap.h>
 #include <linux/swap.h>
 #include <linux/uaccess.h>
+#include "../../mm/internal.h"
+
+#define MARKER() printk("Function %s:%d\n", __func__, __LINE__);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 /* Every instance of syscall requires an identifier */
@@ -90,6 +94,96 @@ int should_mark(void) {
     return 0;
 }
 
+
+static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
+		     unsigned long address, void *arg)
+{
+    pte_t * ppte;
+    struct page_marking *marking;
+    /* Set up the structure to walk the PT in the current mapping */
+	struct page_vma_mapped_walk pvmw = {
+		.page = page,
+		.vma = vma,
+		.address = address,
+	};
+    printk("Marking address %px\n", address);
+
+    int count = 0;
+    while (page_vma_mapped_walk(&pvmw)) {
+        BUG_ON(count != 0);
+        count++;
+		ppte = pvmw.pte;
+
+        if (pte_rmarked(*ppte)) {
+            MARKER();
+            list_for_each_entry(marking, &vma->marked_pages, other_nodes) {
+                if(marking->vaddr == address) {
+                    break;
+                }
+            }
+            /* Bug if metadata not found */
+            BUG_ON(&marking->other_nodes == &vma->marked_pages);
+            MARKER();
+            marking->owner_count++;
+        } else { /* Not marked yet, will mark */
+            MARKER();
+            BUG_ON(*(void **)arg == NULL);
+            marking = *(struct page_marking **)arg;
+            *(void **)arg = NULL; /* Marking that I have taken the provided buffer */
+            marking->vaddr = address;
+            marking->owner_count = 1;
+            MARKER();
+            printk("%px %px %px\n", &vma->marked_pages, vma->marked_pages.next, vma->marked_pages.prev);
+            list_add(&marking->other_nodes, &vma->marked_pages);
+            // printk("marking %px other next %px prev %px\n", marking, marking->other_nodes.next, marking->other_nodes.prev);
+            MARKER();
+            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
+        }
+        //TODO: Handle the cases where mmap/mprotect split or merge vmas
+    }
+    printk("Marking done \n");
+    return true;
+}
+
+static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
+		     unsigned long address, void *arg) 
+{
+    pte_t *ppte;
+    struct page_marking *marking;
+    struct page_vma_mapped_walk pvmw = {
+		.page = page,
+		.vma = vma,
+		.address = address,
+	};
+    printk("Trying to unmark address %px\n", address);
+
+    while (page_vma_mapped_walk(&pvmw)) {
+        ppte = pvmw.pte;
+        BUG_ON(!pte_rmarked(*ppte));
+
+        // printk("Here at %s:%d\n", __func__, __LINE__);
+        list_for_each_entry(marking, &vma->marked_pages, other_nodes) {
+            if(marking->vaddr == address) {
+                break;
+            }
+        }
+        /* Bug if metadata not found */
+        BUG_ON(&marking->other_nodes == &vma->marked_pages);
+        // printk("Here at %s:%d\n", __func__, __LINE__);
+        
+        /* Release node from markings list when last owner */
+        if((marking->owner_count--) == 1) {
+            // printk("Here at %s:%d\n", __func__, __LINE__);
+            // printk("marking %px other next %px prev %px\n", marking, marking->other_nodes.next, marking->other_nodes.prev);
+            list_del(&marking->other_nodes);
+            kfree(marking);
+            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(*ppte));
+        }
+    }
+    printk("Unmarking done \n");
+    return true;
+}
+
 void tocttou_file_mark_start(struct file *file) {
     /* TODO */
 }
@@ -102,9 +196,18 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     pmd_t *pmd;
     pte_t *ptep, pte;
     struct page *pframe, *pframe_copy;
-    void *pframe_vaddr;
+    void *pframe_vaddr, *new_marking_space;
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
+    struct vm_area_struct *vma;
+    /* Pre-setup for structure which walks reverse mappings for a frame */
+	struct rmap_walk_control rwc = {
+        .arg = NULL,
+		.rmap_one = page_mark_one,
+		.anon_lock = page_lock_anon_vma_read,
+	};
+
+    MARKER();
 
     /* Reading within a single page */
     BUG_ON(((src + size - 1) & PAGE_SIZE) != (src & PAGE_SIZE));
@@ -187,16 +290,37 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             new_marked_pframe->pframe = pframe;
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
             pframe_copy = pframe;
-        } else if (iter_version->pframe == NULL) { /* Marked, unduplicated: Reading from original pframe */
-            pframe_copy = pframe;
-        } else {                             /* Marked, duplicated: Read from iter_version's pframe */
-            pframe_copy = page_address(iter_version->pframe);
+
+            /* Marked pages also become read-only */
+		    vma = find_vma(current->mm, src);
+            /* Visit all VM spaces that map this page and mark the mapings
+             * rwc.arg holds the preallocated struct page_marking because we cannot
+             * call kmalloc under spinlocks. Calls page_mark_one.
+             * Space allocated here. If not used, freed after the rmap_walk.
+             * If needed during page_mark_one, added to VMA marked_pages list. 
+             * Then freed during page_unmark_one. */
+            new_marking_space = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+            BUG_ON(new_marking_space == NULL);
+            rwc.arg = &new_marking_space;
+            rmap_walk(pframe, &rwc);
+            if(new_marking_space) 
+                kfree(new_marking_space);
+
+            up_read(&current->mm->mmap_lock);
+        } else{
+            up_read(&current->mm->mmap_lock);
+            if (iter_version->pframe == NULL) /* Marked, unduplicated: Reading from original pframe */
+                pframe_copy = pframe;
+            else                              /* Marked, duplicated: Read from iter_version's pframe */
+                pframe_copy = page_address(iter_version->pframe);
         }
 
         pframe_vaddr = page_address(pframe_copy);
         BUG_ON(pframe_vaddr == NULL);
         src = (uintptr_t)pframe_vaddr + (src & ~PAGE_MASK);
-        //TODO: Locking? what to do with current->mm->mmap_lock?
+
+    MARKER();
+
         return __raw_copy_from_user((void *)dst, (const void *)src, size);
     }
 
@@ -220,6 +344,8 @@ raw_copy_from_user(void *dst, const void __user *src, unsigned long size) {
     uintptr_t id, address, cur_dst, cur_src;
     unsigned long cur_sz, remaining_sz, unread_sz;
     struct vm_area_struct *vma;
+
+    // MARKER();
 
     id = get_syscall_identifier();
 
@@ -257,6 +383,8 @@ raw_copy_from_user(void *dst, const void __user *src, unsigned long size) {
             cur_src += cur_sz;
         }
 
+    MARKER();
+
         /* remaining_sz should always be zero */
         return remaining_sz;
     } else /* Use standard method */
@@ -264,5 +392,40 @@ raw_copy_from_user(void *dst, const void __user *src, unsigned long size) {
 }
 EXPORT_SYMBOL(raw_copy_from_user);
 // #endif /* !defined(INLINE_COPY_FROM_USER) */
+
+void syscall_marking_cleanup() {
+	struct marked_frame *marked_frame, *next;
+	struct page_version *version;
+    /* Pre-setup for structure which walks reverse mappings for a frame */
+	struct rmap_walk_control rwc = {
+        .arg = NULL,
+		.rmap_one = page_unmark_one,
+		.anon_lock = page_lock_anon_vma_read,
+	};
+
+	/* Reset the system call information */	
+	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
+        /* For each pframe, reverse walk to unmark virtual pages */
+        rmap_walk(marked_frame->pframe, &rwc);
+
+		/* Find and delete version */
+		list_for_each_entry(version, &marked_frame->pframe->versions, other_nodes) {
+			if(version->task == current)
+				break;
+		}
+		BUG_ON(version == NULL);
+
+		list_del(&version->other_nodes);
+		kfree(version);
+
+		/* Release frame for marked, duplicated pages */
+		if(version->pframe)
+			__free_page(version->pframe);
+
+		list_del(&marked_frame->other_nodes);
+		kfree(marked_frame);
+	}
+}
+EXPORT_SYMBOL(syscall_marking_cleanup);
 
 #endif /* CONFIG_TOCTTOU_PROTECTION */
