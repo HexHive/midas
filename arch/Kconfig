@@ -729,6 +729,7 @@ config ARCH_WANT_HUGE_PMD_SHARE
 
 config HAVE_ARCH_SOFT_DIRTY
 	bool
+	depends on !TOCTTOU_PROTECTION
 
 config HAVE_MOD_ARCH_SPECIFIC
 	bool
