@@ -155,6 +155,8 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 void syscall_marking_cleanup(void);
+void* tocttou_duplicate_page_alloc(void);
+void tocttou_duplicate_page_free(struct page *page);
 #endif
 
 #ifdef INLINE_COPY_FROM_USER

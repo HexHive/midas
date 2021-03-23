@@ -8,6 +8,24 @@
 #define MARKER() printk("Function %s:%d\n", __func__, __LINE__);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+
+void *tocttou_duplicate_page_alloc()
+{
+    // TODO: Set up duplicate page cache
+	// return kmem_cache_alloc(tocttou_duplicate_page_cache, GFP_KERNEL);
+    struct page *pframe = alloc_page(GFP_USER);
+    pframe->version_refcount = 0;
+    return pframe;
+}
+
+void tocttou_duplicate_page_free(struct page *pframe)
+{
+    BUG_ON(pframe->version_refcount != 0);
+    // TODO: Set up duplicate page cache
+	// kmem_cache_free(tocttou_duplicate_page_cache, page);
+    __free_page(pframe);
+}
+
 /* Every instance of syscall requires an identifier */
 uintptr_t 
 get_syscall_identifier(void) {
@@ -403,9 +421,10 @@ void syscall_marking_cleanup() {
 		kfree(version);
 
 		/* Release frame for marked, duplicated pages */
-		if(version->pframe)
-			__free_page(version->pframe);
-
+		if(version->pframe) {
+            if(version->pframe->version_refcount-- == 1)
+    			tocttou_duplicate_page_free(version->pframe);
+        }
 		list_del(&marked_frame->other_nodes);
 		kfree(marked_frame);
         spin_unlock(&marked_frame->pframe->versions_lock);
