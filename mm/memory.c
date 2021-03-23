@@ -4395,36 +4395,40 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);
 
-	pframe = pte_page(vmf->orig_pte);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	if(vmf->flags & FAULT_FLAG_TOCTTOU) {
+		pframe = pte_page(vmf->orig_pte);
 
-	/* Properly initialized pframe should have versions list initialized */
-	BUG_ON(pframe->versions.next == NULL);
-	BUG_ON(pframe->versions.prev == NULL);
-	// //TODO: Fix this hack to properly initialize pages.
-	// //For now, initialize list for pages for which it has not yet been done
-	// if(pframe->versions.next == NULL && pframe->versions.prev == NULL) {
-	// 	printk("Initializing versions list\n");
-	// 	spin_lock_init(&pframe->versions_lock);
-	// 	INIT_LIST_HEAD(&pframe->versions);
-	// }
-
-	/* If pframe is not marked, it will not have any versions. 
-	 * Having versions directly implies that it is marked */
-	spin_lock(&pframe->versions_lock);
-	list_for_each_entry(version, &pframe->versions, other_nodes) {
-		/* Duplicate for every syscall currently marking this frame
-		 * which does not already have a version pframe */
-		if(version->pframe == NULL) {
-			if(!dup_pframe){
-				dup_pframe = tocttou_duplicate_page_alloc(); 
-				BUG_ON(dup_pframe == NULL);
-				memcpy(page_address(dup_pframe), page_address(pframe), PAGE_SIZE);
-			} 
-			dup_pframe->version_refcount++;
-			version->pframe = dup_pframe;
+		/* Properly initialized pframe should have versions list initialized */
+		// BUG_ON(pframe->versions.next == NULL);
+		// BUG_ON(pframe->versions.prev == NULL);
+		//TODO: Fix this hack to properly initialize pages.
+		//For now, initialize list for pages for which it has not yet been done
+		if(pframe->versions.next == NULL && pframe->versions.prev == NULL) {
+			printk("Initializing versions list\n");
+			spin_lock_init(&pframe->versions_lock);
+			INIT_LIST_HEAD(&pframe->versions);
 		}
+
+		/* If pframe is not marked, it will not have any versions. 
+		* Having versions directly implies that it is marked */
+		spin_lock(&pframe->versions_lock);
+		list_for_each_entry(version, &pframe->versions, other_nodes) {
+			/* Duplicate for every syscall currently marking this frame
+			* which does not already have a version pframe */
+			if(version->pframe == NULL) {
+				if(!dup_pframe){
+					dup_pframe = tocttou_duplicate_page_alloc(); 
+					BUG_ON(dup_pframe == NULL);
+					memcpy(page_address(dup_pframe), page_address(pframe), PAGE_SIZE);
+				} 
+				dup_pframe->version_refcount++;
+				version->pframe = dup_pframe;
+			}
+		}
+		spin_unlock(&pframe->versions_lock);
 	}
-	spin_unlock(&pframe->versions_lock);
+#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);
 	spin_lock(vmf->ptl);
