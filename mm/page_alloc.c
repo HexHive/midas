@@ -2320,6 +2320,7 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 		clear_page_pfmemalloc(page);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	spin_lock_init(&page->versions_lock);
 	INIT_LIST_HEAD(&page->versions);
 #endif
 

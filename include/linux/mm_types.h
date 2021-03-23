@@ -233,7 +233,11 @@ struct page {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	struct list_head versions;
+	spinlock_t versions_lock;
+	union {
+		struct list_head versions;
+		int version_refcount;
+	};
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 } _struct_page_alignment;
 
