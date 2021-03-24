@@ -10,6 +10,18 @@
 #include <linux/mm.h>
 #include <linux/mmzone.h>
 
+struct page *get_page_from_free_area(struct free_area *area,
+					    int migratetype)
+{
+	struct page *pframe = list_first_entry_or_null(&area->free_list[migratetype],
+												struct page, lru);
+	// INIT_LIST_HEAD(&pframe->versions);
+	// spin_lock_init(&pframe->versions_lock);
+
+	return pframe;
+}
+EXPORT_SYMBOL(get_page_from_free_area);
+
 struct pglist_data *first_online_pgdat(void)
 {
 	return NODE_DATA(first_online_node);
