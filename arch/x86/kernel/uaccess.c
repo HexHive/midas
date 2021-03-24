@@ -107,6 +107,7 @@ int should_mark(void) {
     /* Allowlist for testing */
     switch (current->op_code) {
         case __NR_write:
+        case __NR_pipe:
             return 1;
     }
 
@@ -194,6 +195,7 @@ void tocttou_file_mark_start(struct file *file) {
     /* TODO */
 }
 
+static
 unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned long src, unsigned long size) {
     unsigned tries;
     pgd_t *pgd;
@@ -332,12 +334,68 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     return size;
 }
 
+#define CONFIG_RAW_COPY_BUFFER_THRESHOLD (PAGE_SIZE * 2)
+
+/* Buffering technique description
+ * Copies to user are buffered in a list of contiguous regions headed in 
+ * current->c2u_buffer. 
+ * 
+ * Below, I show two regions buffering three writes. The first write links
+ * to the next. The second write links to the third, and so on...
+ * The third write does not fit in the first region, so is moved to a 
+ * second region.
+ * 
+ *           |------------------->
+ * |{other_nodes,...,data        }{other_nodes,...,data     }--------|
+ *                                    |
+ *  <---------------------------------/
+ * |{other_nodes,...,data     }--------------------------------------|
+ * 
+ */
 unsigned long __must_check
 raw_copy_to_user(void __user *dst, const void *src, unsigned long size) {
-    /* TODO */
+    int needs_alloc = 0;
+    unsigned tmp;
+    struct buffered_write *last;
 
-    /* Placeholder */
-    return __raw_copy_to_user(dst, src, size);
+    if(!should_mark())
+        return __raw_copy_to_user(dst, src, size);
+
+    if(size > CONFIG_RAW_COPY_BUFFER_THRESHOLD - sizeof(struct buffered_write)) {
+        //TODO: Uros' technique
+        BUG();
+        return size;
+    }
+
+    if(list_empty(&current->c2u_buffer))
+        needs_alloc = 1;
+    else {
+        last = list_last_entry(&current->c2u_buffer, struct buffered_write, other_nodes);
+        if(last->bytes_left < (sizeof(struct buffered_write) + size))
+            needs_alloc = 1;
+    }
+    if(needs_alloc){
+        /* Empty list, or insufficient space */
+        last = (struct buffered_write *)__get_free_pages(GFP_KERNEL, 1);
+        if(last == NULL)
+            return size;
+        list_add(&last->other_nodes, &current->c2u_buffer);
+        last->bytes_left = 2 * PAGE_SIZE - sizeof(struct buffered_write);
+        last->new_alloc = 1;
+    } else {
+        /* Sufficient space, necessarily non-empty list */
+        tmp = last->bytes_left;
+        last = (struct buffered_write *)((char *)(last + 1) + last->size);
+        last->bytes_left = tmp - sizeof(struct buffered_write);
+        last->new_alloc = 0;
+    }
+    last->dst = dst;
+    last->size = size;
+    BUG_ON(last->bytes_left < size);
+    last->bytes_left -= size;
+    memcpy(last->data, src, size);
+
+    return 0;
 }
 EXPORT_SYMBOL(raw_copy_to_user);
 
@@ -396,6 +454,10 @@ EXPORT_SYMBOL(raw_copy_from_user);
 void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
 	struct page_version *version;
+    struct buffered_write *buffered_write, *next_write;
+    unsigned long tmplong;
+    void *to_be_freed = NULL;
+
     /* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = {
         .arg = NULL,
@@ -429,6 +491,24 @@ void syscall_marking_cleanup() {
 		kfree(marked_frame);
         spin_unlock(&marked_frame->pframe->versions_lock);
 	}
+
+    /* Flush buffered copy_to_user to userspace */
+    list_for_each_entry_safe(buffered_write, next_write, &current->c2u_buffer, other_nodes) {
+        
+        tmplong = __raw_copy_to_user(buffered_write->dst, 
+                                    buffered_write->data, buffered_write->size);
+        BUG_ON(tmplong != 0);
+
+        if(buffered_write->new_alloc) {
+            if(to_be_freed)
+                free_pages((unsigned long)to_be_freed, 1);
+            to_be_freed = buffered_write;
+        }
+        
+        list_del(&buffered_write->other_nodes);
+    }
+    if(to_be_freed)
+        free_pages((unsigned long)to_be_freed, 1);
 }
 EXPORT_SYMBOL(syscall_marking_cleanup);
 

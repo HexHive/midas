@@ -651,6 +651,15 @@ struct marked_frame {
 	struct page *pframe;
 	struct list_head other_nodes;
 };
+
+struct buffered_write {
+	struct list_head other_nodes;
+	void *dst;
+	unsigned long size;
+	unsigned bytes_left;
+	unsigned new_alloc;
+	char data[];
+};
 #endif
 
 struct task_struct {
@@ -1379,6 +1388,7 @@ struct task_struct {
 	/* The metadata structures needed for each thread and locks for them */
 	long op_code;
 	struct list_head marked_frames;
+	struct list_head c2u_buffer;
 #endif
 
 	/*
