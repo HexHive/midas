@@ -208,12 +208,11 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
             kfree(marking);
             set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(*ppte));
 			flush_tlb_page(vma, pvmw.address);
-        }
-        /* Release 'readers' for the VMA's address space. When there are 
-         * no markings for the address space, it can be modified, allowing
-         * split/merge of VMAs */
-        for(i = 0; i < n_owners_released; i++)
+            /* Release 'readers' for the VMA's address space. When there are 
+            * no markings for the address space, it can be modified, allowing
+            * split/merge of VMAs */
             up_read(&vma->vm_mm->mmap_lock);
+        }
     }
     return true;
 }
