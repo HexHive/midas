@@ -159,10 +159,17 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             marking->vaddr = address;
             marking->owner_count = 1;
             list_add(&marking->other_nodes, &vma->marked_pages);
+            /* Add a 'reader' to mmap_lock for every marked page in the VMA.
+             * This ensures that the VMAs will not change (split/merge)
+             * until there are no markings in the address space.
+             * Operations that change VMAs should be part of the setup phase
+             * of programs, and not affect their main runtime */
+            down_read(&vma->vm_mm->mmap_lock);
+
+            /* Marking at the actual page tables */
             set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
 			flush_tlb_page(vma, pvmw.address);
         }
-        //TODO: Handle the cases where mmap/mprotect split or merge vmas
     }
     return true;
 }
@@ -177,7 +184,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		.vma = vma,
 		.address = address,
 	};
-    int tmp_owner_count, *n_owners_released = (int *)arg;
+    int i, tmp_owner_count, n_owners_released = *(int *)arg;
 
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
@@ -193,8 +200,8 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
         
         /* Release node from markings list when last owner */
         tmp_owner_count = marking->owner_count;
-        BUG_ON(tmp_owner_count < *n_owners_released);
-        tmp_owner_count -= *n_owners_released;
+        BUG_ON(tmp_owner_count < n_owners_released);
+        tmp_owner_count -= n_owners_released;
         marking->owner_count = tmp_owner_count;
         if(tmp_owner_count == 0) {
             list_del(&marking->other_nodes);
@@ -202,6 +209,11 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
             set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(*ppte));
 			flush_tlb_page(vma, pvmw.address);
         }
+        /* Release 'readers' for the VMA's address space. When there are 
+         * no markings for the address space, it can be modified, allowing
+         * split/merge of VMAs */
+        for(i = 0; i < n_owners_released; i++)
+            up_read(&vma->vm_mm->mmap_lock);
     }
     return true;
 }
