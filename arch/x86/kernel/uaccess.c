@@ -8,6 +8,7 @@
 #define MARKER() printk("Function %s:%d\n", __func__, __LINE__);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+#define CONFIG_MAX_CORES 4
 
 void *tocttou_duplicate_page_alloc()
 {
@@ -121,7 +122,8 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
     pte_t * ppte;
-    struct page_marking *marking;
+    struct page_marking *marking, **spaces;
+    unsigned i;
     /* Set up the structure to walk the PT in the current mapping */
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
@@ -145,9 +147,15 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             BUG_ON(&marking->other_nodes == &vma->marked_pages);
             marking->owner_count++;
         } else { /* Not marked yet, will mark */
-            BUG_ON(*(void **)arg == NULL);
-            marking = *(struct page_marking **)arg;
-            *(void **)arg = NULL; /* Marking that I have taken the provided buffer */
+            spaces = arg;
+            for(i = 0; i < CONFIG_MAX_CORES; i++){
+                marking = spaces[i];
+                if(marking) {
+                    spaces[i] = NULL; /* Marking that I have taken the provided buffer */
+                    break;
+                }
+            }
+            BUG_ON(i == CONFIG_MAX_CORES);
             marking->vaddr = address;
             marking->owner_count = 1;
             list_add(&marking->other_nodes, &vma->marked_pages);
@@ -205,14 +213,14 @@ void tocttou_file_mark_start(struct file *file) {
 
 static
 unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned long src, unsigned long size) {
-    unsigned tries;
+    unsigned tries, i;
     pgd_t *pgd;
     p4d_t *p4d;
     pud_t *pud;
     pmd_t *pmd;
     pte_t *ptep, pte;
     struct page *pframe, *pframe_copy;
-    void *pframe_vaddr, *new_marking_space;
+    void *pframe_vaddr, *new_marking_space[CONFIG_MAX_CORES];
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
     struct vm_area_struct *vma;
@@ -314,12 +322,15 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
              * Space allocated here. If not used, freed after the rmap_walk.
              * If needed during page_mark_one, added to VMA marked_pages list. 
              * Then freed during page_unmark_one. */
-            new_marking_space = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
-            BUG_ON(new_marking_space == NULL);
+            for(i = 0; i < CONFIG_MAX_CORES; i++){
+                new_marking_space[i] = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+                BUG_ON(new_marking_space[i] == NULL);
+            }
             rwc.arg = &new_marking_space;
             rmap_walk(pframe, &rwc);
-            if(new_marking_space) 
-                kfree(new_marking_space);
+            for(i = 0; i < CONFIG_MAX_CORES; i++)
+                if(new_marking_space[i]) 
+                    kfree(new_marking_space[i]);
 
             up_read(&current->mm->mmap_lock);
         } else{
