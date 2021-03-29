@@ -46,7 +46,6 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	// current->tocttou_syscall = 0;
 	current->op_code = nr;
 	INIT_LIST_HEAD(&current->marked_frames);
-	INIT_LIST_HEAD(&current->c2u_buffer);
 #endif 
 
 	instrumentation_begin();

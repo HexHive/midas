@@ -4345,6 +4345,13 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	pte_t entry;
 	struct page *pframe, *dup_pframe = NULL;
 	struct page_version *version;
+	int owner_release_count = 0;
+	/* Pre-setup for structure which walks reverse mappings for a frame */
+	struct rmap_walk_control rwc = { 
+			.arg = &owner_release_count,
+			.rmap_one = page_unmark_one,
+			.anon_lock = page_lock_anon_vma_read,
+		};
 
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
@@ -4396,23 +4403,33 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		return do_numa_page(vmf);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	if(vmf->flags & FAULT_FLAG_TOCTTOU) {
-		pframe = pte_page(vmf->orig_pte);
+	pframe = pte_page(vmf->orig_pte);
 
-		/* Properly initialized pframe should have versions list initialized */
-		// BUG_ON(pframe->versions.next == NULL);
-		// BUG_ON(pframe->versions.prev == NULL);
-		//TODO: Fix this hack to properly initialize pages.
-		//For now, initialize list for pages for which it has not yet been done
-		if(pframe->versions.next == NULL && pframe->versions.prev == NULL) {
-			printk("Initializing versions list\n");
-			spin_lock_init(&pframe->versions_lock);
-			INIT_LIST_HEAD(&pframe->versions);
-		}
+	/* Properly initialized pframe should have versions list initialized */
+	// BUG_ON(pframe->versions.next == NULL);
+	// BUG_ON(pframe->versions.prev == NULL);
+	//TODO: Fix this hack to properly initialize pages.
+	//For now, initialize list for pages for which it has not yet been done
+	if(pframe->versions.next == NULL && pframe->versions.prev == NULL) {
+		// printk("Initializing versions list\n");
+		mutex_init(&pframe->versions_lock);
+		INIT_LIST_HEAD(&pframe->versions);
+	}
 
-		/* If pframe is not marked, it will not have any versions. 
-		* Having versions directly implies that it is marked */
-		spin_lock(&pframe->versions_lock);
+	/* A page might be 
+		* - (unmarked, unduplicated) this is not a tiktok issue, so normal segfault 
+		*                            procedure should apply.
+		* - (unmarked, duplicated) this page has already been duplicated, but not 
+		*                          re-marked after that. Normal segfault procedure also.
+		* - (marked) this means at-least one task has marked it. Page may have been 
+		*            previously duplicated. On this fault, duplicate for those tasks
+		*            which do not have a copy yet, and unmark.
+		*/
+	mutex_lock(&pframe->versions_lock);	
+	entry = *vmf->pte;	
+	BUG_ON(pte_none(entry));
+	if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(entry)) {
+
 		list_for_each_entry(version, &pframe->versions, other_nodes) {
 			/* Duplicate for every syscall currently marking this frame
 			* which does not already have a version pframe */
@@ -4424,10 +4441,20 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 				} 
 				dup_pframe->version_refcount++;
 				version->pframe = dup_pframe;
+				owner_release_count++;
 			}
 		}
-		spin_unlock(&pframe->versions_lock);
+		/* Having a NULL dup_pframe here means that none of the entries in the 
+		 * pframe's versions list lacked a duplicate. This should not happen,
+		 * since the page is marked only when a version is also added to the list
+		 * without a duplicate. */
+		/* Edit: It is possible that a syscall finished and removed the version */
+		BUG_ON(dup_pframe == NULL);
+
+		/* Reverse walk to unmark all virtual pages */
+		rmap_walk(pframe, &rwc);
 	}
+	mutex_unlock(&pframe->versions_lock);
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 
 	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);

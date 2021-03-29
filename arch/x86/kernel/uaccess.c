@@ -74,7 +74,7 @@ int should_mark(void) {
 		// case __NR_pwrite64:
 		// case __NR_pwritev2:
 		// case __NR_write:
-		// 	return 0;
+			return 0;
 		
 		/*
 		// The additional calls represent the most frequent calls in the benchmarks
@@ -104,6 +104,8 @@ int should_mark(void) {
 			return 0;
 	}
 
+    return 1;
+    
     /* Allowlist for testing */
     switch (current->op_code) {
         case __NR_write:
@@ -157,7 +159,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
     return true;
 }
 
-static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
+bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg) 
 {
     pte_t *ppte;
@@ -167,6 +169,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		.vma = vma,
 		.address = address,
 	};
+    int tmp_owner_count, *n_owners_released = (int *)arg;
 
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
@@ -181,7 +184,11 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
         BUG_ON(&marking->other_nodes == &vma->marked_pages);
         
         /* Release node from markings list when last owner */
-        if((marking->owner_count--) == 1) {
+        tmp_owner_count = marking->owner_count;
+        BUG_ON(tmp_owner_count < *n_owners_released);
+        tmp_owner_count -= *n_owners_released;
+        marking->owner_count = tmp_owner_count;
+        if(tmp_owner_count == 0) {
             list_del(&marking->other_nodes);
             kfree(marking);
             set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(*ppte));
@@ -190,6 +197,7 @@ static bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
     }
     return true;
 }
+EXPORT_SYMBOL(page_unmark_one);
 
 void tocttou_file_mark_start(struct file *file) {
     /* TODO */
@@ -274,7 +282,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         mark_page_accessed(pframe);
         mark_page_accessed(pframe);
 
-        spin_lock(&pframe->versions_lock);
+        mutex_lock(&pframe->versions_lock);
         /* Check the list of duplicates for the frame to see if there is one corresponding to 
          * this syscall */
         list_for_each_entry(iter_version, &pframe->versions, other_nodes) {
@@ -321,7 +329,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
                 pframe_copy = page_address(iter_version->pframe);
             up_read(&current->mm->mmap_lock);
         }
-        spin_unlock(&pframe->versions_lock);
+        mutex_unlock(&pframe->versions_lock);
 
         pframe_vaddr = page_address(pframe_copy);
         BUG_ON(pframe_vaddr == NULL);
@@ -336,66 +344,9 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
 #define CONFIG_RAW_COPY_BUFFER_THRESHOLD (PAGE_SIZE * 2)
 
-/* Buffering technique description
- * Copies to user are buffered in a list of contiguous regions headed in 
- * current->c2u_buffer. 
- * 
- * Below, I show two regions buffering three writes. The first write links
- * to the next. The second write links to the third, and so on...
- * The third write does not fit in the first region, so is moved to a 
- * second region.
- * 
- *           |------------------->
- * |{other_nodes,...,data        }{other_nodes,...,data     }--------|
- *                                    |
- *  <---------------------------------/
- * |{other_nodes,...,data     }--------------------------------------|
- * 
- */
 unsigned long __must_check
 raw_copy_to_user(void __user *dst, const void *src, unsigned long size) {
-    int needs_alloc = 0;
-    unsigned tmp;
-    struct buffered_write *last;
-
-    if(!should_mark())
-        return __raw_copy_to_user(dst, src, size);
-
-    if(size > CONFIG_RAW_COPY_BUFFER_THRESHOLD - sizeof(struct buffered_write)) {
-        //TODO: Uros' technique
-        BUG();
-        return size;
-    }
-
-    if(list_empty(&current->c2u_buffer))
-        needs_alloc = 1;
-    else {
-        last = list_last_entry(&current->c2u_buffer, struct buffered_write, other_nodes);
-        if(last->bytes_left < (sizeof(struct buffered_write) + size))
-            needs_alloc = 1;
-    }
-    if(needs_alloc){
-        /* Empty list, or insufficient space */
-        last = (struct buffered_write *)__get_free_pages(GFP_KERNEL, 1);
-        if(last == NULL)
-            return size;
-        list_add(&last->other_nodes, &current->c2u_buffer);
-        last->bytes_left = 2 * PAGE_SIZE - sizeof(struct buffered_write);
-        last->new_alloc = 1;
-    } else {
-        /* Sufficient space, necessarily non-empty list */
-        tmp = last->bytes_left;
-        last = (struct buffered_write *)((char *)(last + 1) + last->size);
-        last->bytes_left = tmp - sizeof(struct buffered_write);
-        last->new_alloc = 0;
-    }
-    last->dst = dst;
-    last->size = size;
-    BUG_ON(last->bytes_left < size);
-    last->bytes_left -= size;
-    memcpy(last->data, src, size);
-
-    return 0;
+    return __raw_copy_to_user(dst, src, size);
 }
 EXPORT_SYMBOL(raw_copy_to_user);
 
@@ -454,23 +405,16 @@ EXPORT_SYMBOL(raw_copy_from_user);
 void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
 	struct page_version *version;
-    struct buffered_write *buffered_write, *next_write;
-    unsigned long tmplong;
-    void *to_be_freed = NULL;
+    int owners_released = 1;
 
-    /* Pre-setup for structure which walks reverse mappings for a frame */
-	struct rmap_walk_control rwc = {
-        .arg = NULL,
-		.rmap_one = page_unmark_one,
-		.anon_lock = page_lock_anon_vma_read,
-	};
-
-
+    struct rmap_walk_control rwc = {
+        .arg = &owners_released,
+        .rmap_one = page_unmark_one,
+        .anon_lock = page_lock_anon_vma_read,
+    };
 	/* Reset the system call information */	
 	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
-        spin_lock(&marked_frame->pframe->versions_lock);
-        /* For each pframe, reverse walk to unmark virtual pages */
-        rmap_walk(marked_frame->pframe, &rwc);
+        mutex_lock(&marked_frame->pframe->versions_lock);
 
 		/* Find and delete version */
 		list_for_each_entry(version, &marked_frame->pframe->versions, other_nodes) {
@@ -482,33 +426,19 @@ void syscall_marking_cleanup() {
 		list_del(&version->other_nodes);
 		kfree(version);
 
-		/* Release frame for marked, duplicated pages */
+		/* Release frame for marked, duplicated frames.
+         * For unduplicated ones, unmark */
 		if(version->pframe) {
             if(version->pframe->version_refcount-- == 1)
     			tocttou_duplicate_page_free(version->pframe);
+        } else {
+            /* Reverse walk to unmark all virtual pages */
+            rmap_walk(marked_frame->pframe, &rwc);
         }
 		list_del(&marked_frame->other_nodes);
 		kfree(marked_frame);
-        spin_unlock(&marked_frame->pframe->versions_lock);
+        mutex_unlock(&marked_frame->pframe->versions_lock);
 	}
-
-    /* Flush buffered copy_to_user to userspace */
-    list_for_each_entry_safe(buffered_write, next_write, &current->c2u_buffer, other_nodes) {
-        
-        tmplong = __raw_copy_to_user(buffered_write->dst, 
-                                    buffered_write->data, buffered_write->size);
-        BUG_ON(tmplong != 0);
-
-        if(buffered_write->new_alloc) {
-            if(to_be_freed)
-                free_pages((unsigned long)to_be_freed, 1);
-            to_be_freed = buffered_write;
-        }
-        
-        list_del(&buffered_write->other_nodes);
-    }
-    if(to_be_freed)
-        free_pages((unsigned long)to_be_freed, 1);
 }
 EXPORT_SYMBOL(syscall_marking_cleanup);
 

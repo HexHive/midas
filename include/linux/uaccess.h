@@ -154,6 +154,8 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 }
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
+bool page_unmark_one(struct page *, struct vm_area_struct *,
+								     unsigned long, void *);
 void syscall_marking_cleanup(void);
 void* tocttou_duplicate_page_alloc(void);
 void tocttou_duplicate_page_free(struct page *page);

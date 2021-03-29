@@ -233,7 +233,7 @@ struct page {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	spinlock_t versions_lock;
+	struct mutex versions_lock;
 	union {
 		struct list_head versions;
 		int version_refcount;
