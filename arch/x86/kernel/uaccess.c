@@ -184,7 +184,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		.vma = vma,
 		.address = address,
 	};
-    int i, tmp_owner_count, n_owners_released = *(int *)arg;
+    int tmp_owner_count, n_owners_released = *(int *)arg;
 
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
@@ -427,7 +427,7 @@ EXPORT_SYMBOL(raw_copy_from_user);
 void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
 	struct page_version *version;
-    int owners_released = 1;
+    int owners_released = 1, irq_dis;
 
     struct rmap_walk_control rwc = {
         .arg = &owners_released,
@@ -445,21 +445,30 @@ void syscall_marking_cleanup() {
 		}
 		BUG_ON(version == NULL);
 
-		list_del(&version->other_nodes);
-		kfree(version);
 
-		/* Release frame for marked, duplicated frames.
+		/* Release frame for marked, duplicated frames. Duplication happened in 
+         * the page-fault handler, which also unmarked them. 
          * For unduplicated ones, unmark */
 		if(version->pframe) {
             if(version->pframe->version_refcount-- == 1)
     			tocttou_duplicate_page_free(version->pframe);
         } else {
+            /* Enabling interrupts to prevent warning when flushing
+             * TLBs with smp_call_function_many_cond as part of this rwalk 
+             * which calls page_unmark_one. */
+            irq_dis = irqs_disabled();
+            local_irq_enable();
             /* Reverse walk to unmark all virtual pages */
             rmap_walk(marked_frame->pframe, &rwc);
+            if(irq_dis)
+                local_irq_disable();
         }
+		list_del(&version->other_nodes);
+		kfree(version);
+
 		list_del(&marked_frame->other_nodes);
-		kfree(marked_frame);
         mutex_unlock(&marked_frame->pframe->versions_lock);
+		kfree(marked_frame);
 	}
 }
 EXPORT_SYMBOL(syscall_marking_cleanup);
