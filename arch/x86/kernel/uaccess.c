@@ -247,13 +247,13 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     BUG_ON(((dst + size - 1) & PAGE_SIZE) != (dst & PAGE_SIZE));
 
 
-    /* We try this only twice */
-    for(tries = 0; tries < 2; tries++) {
-        down_read(&current->mm->mmap_lock);
+    /* We try this only thrice */
+    for(tries = 0; tries < 3; tries++) {
+        spin_lock(&current->mm->page_table_lock);
 
         pgd = pgd_offset(current->mm, src);
         if(!pgd_present(*pgd)) {
-            up_read(&current->mm->mmap_lock);
+            spin_unlock(&current->mm->page_table_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -261,7 +261,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         p4d = p4d_offset(pgd, src);
         if(!p4d_present(*p4d)) {
-            up_read(&current->mm->mmap_lock);
+            spin_unlock(&current->mm->page_table_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -269,7 +269,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         pud = pud_offset(p4d, src);
         if(!pud_present(*pud)) {
-            up_read(&current->mm->mmap_lock);
+            spin_unlock(&current->mm->page_table_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -277,7 +277,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         pmd = pmd_offset(pud, src);
         if(!pmd_present(*pmd)) {
-            up_read(&current->mm->mmap_lock);
+            spin_unlock(&current->mm->page_table_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -285,7 +285,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         ptep = pte_offset_map(pmd, src);
         if(!pte_present(*ptep)) {
-            up_read(&current->mm->mmap_lock);
+            spin_unlock(&current->mm->page_table_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -322,7 +322,9 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             /* New marked frame for this syscall */
             new_marked_pframe = (struct marked_frame *)kzalloc(sizeof(struct marked_frame), GFP_KERNEL);
             new_marked_pframe->pframe = pframe;
+            mutex_lock(&current->markings_lock);
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
+            mutex_unlock(&current->markings_lock);
             pframe_copy = pframe;
 
             /* Marked pages also become read-only */
@@ -343,13 +345,14 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
                 if(new_marking_space[i]) 
                     kfree(new_marking_space[i]);
 
-            up_read(&current->mm->mmap_lock);
+            spin_unlock(&current->mm->page_table_lock);
         } else{
             if (iter_version->pframe == NULL) /* Marked, unduplicated: Reading from original pframe */
                 pframe_copy = pframe;
             else                              /* Marked, duplicated: Read from iter_version's pframe */
                 pframe_copy = page_address(iter_version->pframe);
-            up_read(&current->mm->mmap_lock);
+
+            spin_unlock(&current->mm->page_table_lock);
         }
         mutex_unlock(&pframe->versions_lock);
 
@@ -429,12 +432,14 @@ void syscall_marking_cleanup() {
 	struct page_version *version;
     int owners_released = 1, irq_dis;
 
+    // printk("%d: syscall %d cleanup (%px)\n", current->pid, current->op_code, current);
     struct rmap_walk_control rwc = {
         .arg = &owners_released,
         .rmap_one = page_unmark_one,
         .anon_lock = page_lock_anon_vma_read,
     };
 	/* Reset the system call information */	
+    mutex_lock(&current->markings_lock);
 	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
         mutex_lock(&marked_frame->pframe->versions_lock);
 
@@ -463,6 +468,7 @@ void syscall_marking_cleanup() {
             if(irq_dis)
                 local_irq_disable();
         }
+        //TODO: Optimization, delete from list first, release lock, then complete stuff
 		list_del(&version->other_nodes);
 		kfree(version);
 
@@ -470,6 +476,7 @@ void syscall_marking_cleanup() {
         mutex_unlock(&marked_frame->pframe->versions_lock);
 		kfree(marked_frame);
 	}
+    mutex_unlock(&current->markings_lock);
 }
 EXPORT_SYMBOL(syscall_marking_cleanup);
 

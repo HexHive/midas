@@ -2834,6 +2834,21 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	pte_t entry;
 	int page_copied = 0;
 	struct mmu_notifier_range range;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	struct page *old_pframe, *new_pframe;
+	struct page_version *version, *next;
+	struct task_struct *task;
+	struct page *dup_pframe = NULL;
+	int owner_release_count = 0, owner_retained_count = 0;
+	struct marked_frame *marking;
+	int is_cow_tocttou = 0;
+	/* Pre-setup for structure which walks reverse mappings for a frame */
+	struct rmap_walk_control rwc = { 
+			.arg = &owner_release_count,
+			.rmap_one = page_unmark_one,
+			.anon_lock = page_lock_anon_vma_read,
+		};
+#endif
 
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
@@ -2879,6 +2894,26 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	 */
 	vmf->pte = pte_offset_map_lock(mm, vmf->pmd, vmf->address, &vmf->ptl);
 	if (likely(pte_same(*vmf->pte, vmf->orig_pte))) {
+		
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(vmf->orig_pte) && is_cow_mapping(vmf->vma->vm_flags)) {
+			// printk("%d COW tocttou\n", current->pid);
+			BUG_ON(old_page == NULL);
+			BUG_ON(new_page == NULL);
+			BUG_ON(new_page->versions.next == NULL);
+			BUG_ON(new_page->versions.prev == NULL);
+			BUG_ON(old_page->versions.next == NULL);
+			BUG_ON(old_page->versions.prev == NULL);
+
+			/* Keeping copies of pointers to both frames, to be used later */
+			old_pframe = old_page;
+			new_pframe = new_page;
+			is_cow_tocttou = 1;
+			mutex_lock(&old_pframe->versions_lock);
+			mutex_lock(&new_pframe->versions_lock);
+		}
+#endif   /* CONFIG_TOCTTOU_PROTECTION */
+
 		if (old_page) {
 			if (!PageAnon(old_page)) {
 				dec_mm_counter_fast(mm,
@@ -2892,6 +2927,13 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		entry = mk_pte(new_page, vma->vm_page_prot);
 		entry = pte_sw_mkyoung(entry);
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		/* In the COW tocttou case, the original pte was rmarked.
+		 * We also mark the new pte so that the later rmap page_unmark_one
+		 * can unmark them properly */
+		if(is_cow_tocttou)
+			entry = pte_rmark(entry);
+#endif
 
 		/*
 		 * Clear the pte entry and flush it first, before updating the
@@ -2910,6 +2952,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		 */
 		set_pte_at_notify(mm, vmf->address, vmf->pte, entry);
 		update_mmu_cache(vma, vmf->address, vmf->pte);
+
 		if (old_page) {
 			/*
 			 * Only after switching the pte to the new page may
@@ -2943,10 +2986,91 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		update_mmu_tlb(vma, vmf->address, vmf->pte);
 	}
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	/* Handle part 1 of COW TOCTTOU: Migrating pframe versions to new pframe
+	 * Before here, the status of the system is:
+	 * - page table lock held
+	 * - rmap created for new frame
+	 * - rmappings for old frame modified?
+	 * - old_pframe holds all versions
+	 * Here, we do two things:
+	 * - Move versions for this address space to new pframe
+	 * - Modify marked frames for all tasks in this address space, to point 
+	 *   to the new frame
+	 * Because of holding the PTL, defer part 2 (rmap changes) to later
+	 */
+	if(is_cow_tocttou) {
+		// printk("%d Starting COW stuff\n", current->pid);
+	
+		list_for_each_entry_safe(version, next, &old_pframe->versions, other_nodes) {
+			/* A version of a COW frame cannot already be duplicated */
+			BUG_ON(version->pframe != NULL);
+
+			task = version->task;
+			/* For each task in the same process (which share the same mm struct)
+				* which have a version of this COW frame, we will have to update their
+				* markings to point to the newly allocated frame */
+			if(task->mm == current->mm) {
+				mutex_lock(&task->markings_lock);
+
+				list_for_each_entry(marking, &task->marked_frames, other_nodes) {
+					if(marking->pframe == old_pframe)
+						marking->pframe = new_pframe;
+				}
+				mutex_unlock(&task->markings_lock);
+				list_move(&version->other_nodes, &new_pframe->versions);
+				owner_release_count++;
+			} else
+				owner_retained_count++;
+		}
+		BUG_ON(owner_release_count == 0);
+
+		/* Early unlock to allow rmap walks to edit permissions */
+		pte_unmap_unlock(vmf->pte, vmf->ptl);
+		if(owner_retained_count > 0){
+			/* Reverse walk to unmark the virtual pages with the number of versions
+			 * which were released (passed as the argument field = owner_release_count
+			 * in rwc struct) */
+			rmap_walk(old_pframe, &rwc);
+		}
+
+		/* Create duplicates for readers of new frame */
+		list_for_each_entry(version, &new_pframe->versions, other_nodes) {
+			if(version->pframe == NULL) {
+				if(!dup_pframe){
+					dup_pframe = tocttou_duplicate_page_alloc(); 
+					BUG_ON(dup_pframe == NULL);
+					memcpy(page_address(dup_pframe), page_address(new_pframe), PAGE_SIZE);
+				} 
+				dup_pframe->version_refcount++;
+				version->pframe = dup_pframe;
+			}
+		}
+		/* VMAs mapping this frame will have owner counts reflecting also those
+		 * from the old frame. Therefore, the actual count to be released is the
+		 * sum of the two */
+		owner_release_count += owner_retained_count; 
+		rmap_walk(new_pframe, &rwc);
+
+		//TODO: Optimize, might be able to release old pframe's lock earlier
+		mutex_unlock(&old_pframe->versions_lock);
+		mutex_unlock(&new_pframe->versions_lock);
+			
+		// printk("%d Ending COW stuff\n", current->pid);
+	} else {
+		pte_unmap_unlock(vmf->pte, vmf->ptl);
+	}
+
+	/* Releasing page *after* unlocking PTL. Hope it does not have
+	 * any bad effect */
+	if (new_page)
+		put_page(new_page);
+#else /* CONFIG_TOCTTOU_PROTECTION */
 	if (new_page)
 		put_page(new_page);
 
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+#endif
 	/*
 	 * No need to double call mmu_notifier->invalidate_range() callback as
 	 * the above ptep_clear_flush_notify() did already call it.
@@ -2965,6 +3089,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		}
 		put_page(old_page);
 	}
+
 	return page_copied ? VM_FAULT_WRITE : 0;
 oom_free_new:
 	put_page(new_page);
@@ -4425,10 +4550,12 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		*            previously duplicated. On this fault, duplicate for those tasks
 		*            which do not have a copy yet, and unmark.
 		*/
-	mutex_lock(&pframe->versions_lock);	
 	entry = *vmf->pte;	
 	BUG_ON(pte_none(entry));
-	if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(entry)) {
+
+	/* Only handle the non-COW case here */
+	if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(entry) && !is_cow_mapping(vmf->vma->vm_flags)) {
+		mutex_lock(&pframe->versions_lock);	
 
 		list_for_each_entry(version, &pframe->versions, other_nodes) {
 			/* Duplicate for every syscall currently marking this frame
@@ -4445,16 +4572,16 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			}
 		}
 		/* Having a NULL dup_pframe here means that none of the entries in the 
-		 * pframe's versions list lacked a duplicate. This should not happen,
-		 * since the page is marked only when a version is also added to the list
-		 * without a duplicate. */
+		* pframe's versions list lacked a duplicate. This should not happen,
+		* since the page is marked only when a version is also added to the list
+		* without a duplicate. */
 		/* Edit: It is possible that a syscall finished and removed the version */
 		BUG_ON(dup_pframe == NULL);
 
 		/* Reverse walk to unmark all virtual pages */
 		rmap_walk(pframe, &rwc);
+		mutex_unlock(&pframe->versions_lock);
 	}
-	mutex_unlock(&pframe->versions_lock);
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 
 	vmf->ptl = pte_lockptr(vmf->vma->vm_mm, vmf->pmd);

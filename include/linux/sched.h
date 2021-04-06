@@ -1378,6 +1378,7 @@ struct task_struct {
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	/* The metadata structures needed for each thread and locks for them */
 	long op_code;
+	struct mutex markings_lock;
 	struct list_head marked_frames;
 #endif
 

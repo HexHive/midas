@@ -46,6 +46,7 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	// current->tocttou_syscall = 0;
 	current->op_code = nr;
 	INIT_LIST_HEAD(&current->marked_frames);
+	mutex_init(&current->markings_lock);
 #endif 
 
 	instrumentation_begin();
