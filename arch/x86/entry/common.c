@@ -45,8 +45,15 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	   pages. Remember in which call we are in. */
 	// current->tocttou_syscall = 0;
 	current->op_code = nr;
+	// if(current->pid > 1)
+	// 	printk("%d:%ld Starting syscall\n", current->pid, nr);
 	INIT_LIST_HEAD(&current->marked_frames);
 	mutex_init(&current->markings_lock);
+	if(current->pid >= 144)
+		printk("%d:%ld Starting syscall\n", current->pid, current->op_code);
+
+	if((current->pid >= 144) && (current->op_code == 231))
+		printk("This is important\n");
 #endif 
 
 	instrumentation_begin();
@@ -69,6 +76,9 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	syscall_marking_cleanup();
 
 	// current->tocttou_syscall = 0;
+	if(current->pid >= 144)
+		printk("%d:%ld Ending syscall\n", current->pid, current->op_code);
+	BUG_ON(mutex_is_locked(&current->markings_lock));
 	current->op_code = -1;
 #endif
 }

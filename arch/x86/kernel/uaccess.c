@@ -39,7 +39,7 @@ get_syscall_identifier(void) {
  */
 int should_mark(void) {
 
-	if (!current->pid)
+	if (current->pid <= 1)
 		return 0;
 
     /* TODO: Copied from Uros. What does this mean? */
@@ -105,7 +105,7 @@ int should_mark(void) {
 			return 0;
 	}
 
-    return 1;
+    // return 1;
     
     /* Allowlist for testing */
     switch (current->op_code) {
@@ -121,7 +121,7 @@ int should_mark(void) {
 static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
-    pte_t * ppte;
+    pte_t *ppte, entry;
     struct page_marking *marking, **spaces;
     unsigned i;
     /* Set up the structure to walk the PT in the current mapping */
@@ -131,13 +131,18 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		.address = address,
 	};
 
+
     int count = 0;
     while (page_vma_mapped_walk(&pvmw)) {
         BUG_ON(count != 0);
         count++;
 		ppte = pvmw.pte;
 
-        if (pte_rmarked(*ppte)) {
+        entry = *ppte;
+        if (!pte_present(entry))
+            continue;
+
+        if (pte_rmarked(entry)) {
             list_for_each_entry(marking, &vma->marked_pages, other_nodes) {
                 if(marking->vaddr == address) {
                     break;
@@ -147,11 +152,14 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             BUG_ON(&marking->other_nodes == &vma->marked_pages);
             marking->owner_count++;
         } else { /* Not marked yet, will mark */
+
+            /* Find an available buffer, and take it. 
+             * Mark acquisition by NULLing that space */
             spaces = arg;
             for(i = 0; i < CONFIG_MAX_CORES; i++){
                 marking = spaces[i];
                 if(marking) {
-                    spaces[i] = NULL; /* Marking that I have taken the provided buffer */
+                    spaces[i] = NULL; 
                     break;
                 }
             }
@@ -167,17 +175,19 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             down_read(&vma->vm_mm->mmap_lock);
 
             /* Marking at the actual page tables */
-            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(*ppte));
+            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
     }
+
+    // printk("%d:%ld Marked address %px\n", current->pid, current->op_code, (void *)address);
     return true;
 }
 
 bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg) 
 {
-    pte_t *ppte;
+    pte_t *ppte, entry;
     struct page_marking *marking;
     struct page_vma_mapped_walk pvmw = {
 		.page = page,
@@ -188,7 +198,11 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
-        BUG_ON(!pte_rmarked(*ppte));
+        entry = *ppte;
+        if(!pte_present(entry))
+            continue;
+
+        BUG_ON(!pte_rmarked(entry));
 
         list_for_each_entry(marking, &vma->marked_pages, other_nodes) {
             if(marking->vaddr == address) {
@@ -206,7 +220,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
         if(tmp_owner_count == 0) {
             list_del(&marking->other_nodes);
             kfree(marking);
-            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(*ppte));
+            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(entry));
 			flush_tlb_page(vma, pvmw.address);
             /* Release 'readers' for the VMA's address space. When there are 
             * no markings for the address space, it can be modified, allowing
@@ -214,6 +228,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
             up_read(&vma->vm_mm->mmap_lock);
         }
     }
+    // printk("%d:%ld Unmarked address %px\n", current->pid, current->op_code, (void *)address);
     return true;
 }
 EXPORT_SYMBOL(page_unmark_one);
@@ -234,7 +249,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     void *pframe_vaddr, *new_marking_space[CONFIG_MAX_CORES];
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
-    struct vm_area_struct *vma;
     /* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = {
         .arg = NULL,
@@ -246,14 +260,15 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     BUG_ON(((src + size - 1) & PAGE_SIZE) != (src & PAGE_SIZE));
     BUG_ON(((dst + size - 1) & PAGE_SIZE) != (dst & PAGE_SIZE));
 
+    if(current->pid > 140 && current->op_code == 231) MARKER();
 
     /* We try this only thrice */
     for(tries = 0; tries < 3; tries++) {
-        spin_lock(&current->mm->page_table_lock);
+        down_read(&current->mm->mmap_lock);
 
         pgd = pgd_offset(current->mm, src);
         if(!pgd_present(*pgd)) {
-            spin_unlock(&current->mm->page_table_lock);
+            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -261,7 +276,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         p4d = p4d_offset(pgd, src);
         if(!p4d_present(*p4d)) {
-            spin_unlock(&current->mm->page_table_lock);
+            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -269,7 +284,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         pud = pud_offset(p4d, src);
         if(!pud_present(*pud)) {
-            spin_unlock(&current->mm->page_table_lock);
+            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -277,7 +292,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         pmd = pmd_offset(pud, src);
         if(!pmd_present(*pmd)) {
-            spin_unlock(&current->mm->page_table_lock);
+            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -285,12 +300,12 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         ptep = pte_offset_map(pmd, src);
         if(!pte_present(*ptep)) {
-            spin_unlock(&current->mm->page_table_lock);
+            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
         }
-
+        
         pte = *ptep;
         /* Here is our page frame */
         pframe = pte_page(pte);
@@ -302,6 +317,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         mark_page_accessed(pframe);
 
         mutex_lock(&pframe->versions_lock);
+        mutex_lock(&current->markings_lock);
         /* Check the list of duplicates for the frame to see if there is one corresponding to 
          * this syscall */
         list_for_each_entry(iter_version, &pframe->versions, other_nodes) {
@@ -312,8 +328,12 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         if(&iter_version->other_nodes == &pframe->versions) {  /* Unmarked, unduplicated: Add to pframe */
             
             new_marked_version = (struct page_version *)kzalloc(sizeof(struct page_version), GFP_KERNEL);
-            if(new_marked_version == NULL)
+            if(new_marked_version == NULL){
+                mutex_unlock(&pframe->versions_lock);
+                mutex_unlock(&current->markings_lock);
+                up_read(&current->mm->mmap_lock);
                 return size;
+            }
             new_marked_version->task = current;
             new_marked_version->pframe = NULL;
             /* New version for the page frame */
@@ -322,13 +342,9 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             /* New marked frame for this syscall */
             new_marked_pframe = (struct marked_frame *)kzalloc(sizeof(struct marked_frame), GFP_KERNEL);
             new_marked_pframe->pframe = pframe;
-            mutex_lock(&current->markings_lock);
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
-            mutex_unlock(&current->markings_lock);
             pframe_copy = pframe;
 
-            /* Marked pages also become read-only */
-		    vma = find_vma(current->mm, src);
             /* Visit all VM spaces that map this page and mark the mapings
              * rwc.arg holds the preallocated struct page_marking because we cannot
              * call kmalloc under spinlocks. Calls page_mark_one.
@@ -345,16 +361,16 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
                 if(new_marking_space[i]) 
                     kfree(new_marking_space[i]);
 
-            spin_unlock(&current->mm->page_table_lock);
         } else{
             if (iter_version->pframe == NULL) /* Marked, unduplicated: Reading from original pframe */
                 pframe_copy = pframe;
             else                              /* Marked, duplicated: Read from iter_version's pframe */
                 pframe_copy = page_address(iter_version->pframe);
 
-            spin_unlock(&current->mm->page_table_lock);
         }
         mutex_unlock(&pframe->versions_lock);
+        mutex_unlock(&current->markings_lock);
+        up_read(&current->mm->mmap_lock);
 
         pframe_vaddr = page_address(pframe_copy);
         BUG_ON(pframe_vaddr == NULL);
@@ -366,8 +382,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     BUG();
     return size;
 }
-
-#define CONFIG_RAW_COPY_BUFFER_THRESHOLD (PAGE_SIZE * 2)
 
 unsigned long __must_check
 raw_copy_to_user(void __user *dst, const void *src, unsigned long size) {
@@ -431,17 +445,32 @@ void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
 	struct page_version *version;
     int owners_released = 1, irq_dis;
-
-    // printk("%d: syscall %d cleanup (%px)\n", current->pid, current->op_code, current);
     struct rmap_walk_control rwc = {
         .arg = &owners_released,
         .rmap_one = page_unmark_one,
         .anon_lock = page_lock_anon_vma_read,
     };
+
+    if(current->pid > 140 && current->op_code == 231) MARKER();
+    // printk("%d:%ld syscall cleanup (%px)\n", current->pid, current->op_code, current);
+
+    /* Enabling interrupts to prevent warning when flushing
+        * TLBs with smp_call_function_many_cond as part of this rwalk 
+        * which calls page_unmark_one. */
+    irq_dis = irqs_disabled();
+    local_irq_enable();
+
+    down_read(&current->mm->mmap_lock);
+retry_syscall_cleanup:
 	/* Reset the system call information */	
     mutex_lock(&current->markings_lock);
 	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
-        mutex_lock(&marked_frame->pframe->versions_lock);
+        /* Preventing mutex deadlock with COW tocttou page duplication code by backing
+         * off */
+        if(mutex_trylock(&marked_frame->pframe->versions_lock) == 0) {
+            mutex_unlock(&current->markings_lock);
+            goto retry_syscall_cleanup;
+        }
 
 		/* Find and delete version */
 		list_for_each_entry(version, &marked_frame->pframe->versions, other_nodes) {
@@ -458,15 +487,8 @@ void syscall_marking_cleanup() {
             if(version->pframe->version_refcount-- == 1)
     			tocttou_duplicate_page_free(version->pframe);
         } else {
-            /* Enabling interrupts to prevent warning when flushing
-             * TLBs with smp_call_function_many_cond as part of this rwalk 
-             * which calls page_unmark_one. */
-            irq_dis = irqs_disabled();
-            local_irq_enable();
             /* Reverse walk to unmark all virtual pages */
             rmap_walk(marked_frame->pframe, &rwc);
-            if(irq_dis)
-                local_irq_disable();
         }
         //TODO: Optimization, delete from list first, release lock, then complete stuff
 		list_del(&version->other_nodes);
@@ -477,6 +499,10 @@ void syscall_marking_cleanup() {
 		kfree(marked_frame);
 	}
     mutex_unlock(&current->markings_lock);
+    up_read(&current->mm->mmap_lock);
+
+    if(irq_dis)
+        local_irq_disable();
 }
 EXPORT_SYMBOL(syscall_marking_cleanup);
 

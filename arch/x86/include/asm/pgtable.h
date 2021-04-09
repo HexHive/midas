@@ -577,7 +577,7 @@ static inline int pte_rmarked(pte_t pte)
 	return pte_flags(pte) & _PAGE_TOCTTOU_MARKED;
 }
 
-static inline int pte_savedwrite(pte_t pte)
+static inline int pte_rmarked_savedwrite(pte_t pte)
 {
 	return pte_flags(pte) & _PAGE_TOCTTOU_OLD;
 }
