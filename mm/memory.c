@@ -2898,7 +2898,6 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 #ifdef CONFIG_TOCTTOU_PROTECTION
 		entry = vmf->orig_pte;
 		if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(entry) && !pte_rmarked_savedwrite(entry)) {
-			printk("%d:%ld COW tocttou \n", current->pid, current->op_code);
 			BUG_ON(old_page == NULL);
 			BUG_ON(new_page == NULL);
 			BUG_ON(new_page->versions.next == NULL);
@@ -2990,23 +2989,21 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	}
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	/* Handle part 1 of COW TOCTTOU: Migrating pframe versions to new pframe
-	 * Before here, the status of the system is:
-	 * - mmap_lock held
-	 * - page table lock held
+	/* Before here, the status of the system is:
+	 * - mmap_lock read held
+	 * - PT frame ptl lock held
 	 * - rmap created for new frame
 	 * - rmappings for old frame modified
 	 * - hold versions_lock on both old and new pframe
 	 * - old_pframe holds all versions in its list
-	 * Here, we do two things:
-	 * - Move versions for this address space to new pframe
-	 * - Modify marked frames for all tasks in this address space, to point 
-	 *   to the new frame
-	 * Because of holding the PTL, defer part 2 (rmap changes) to later
 	 */
 	if(is_cow_tocttou) {
-		// printk("%d Starting COW stuff\n", current->pid);
-	
+		/* Handle part 1 of COW TOCTTOU: Migrating pframe versions to new pframe
+		 * Here, we do two things:
+		 * - Move versions for this address space to new pframe
+		 * - Modify marked frames for all tasks in this address space, to point 
+		 *   to the new frame
+		 */
 		list_for_each_entry_safe(version, next, &old_pframe->versions, other_nodes) {
 			/* A version of a COW frame cannot already be duplicated */
 			BUG_ON(version->pframe != NULL);
@@ -3037,6 +3034,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 				owner_retained_count++;
 		}
 
+		/* Part 2 of COW TOCTTOU: Unmarking pages in VA space */
 		/* Early unlock to allow rmap walks to edit permissions.
 		 * After this, other readers using raw_copy_from_user can find the new
 		 * pframe, but waits on its versions_lock which is still held. 
@@ -3562,7 +3560,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte = pte_wrprotect(pte);
 	}
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	printk("Doing swap tocttou\n");
 	mutex_lock(&page->versions_lock);
 	if(!list_empty(&page->versions)){
 		pte = pte_rmark(pte);
@@ -4576,7 +4573,6 @@ retry_duplication:
 	//TODO: Fix this hack to properly initialize pages.
 	//For now, initialize list for pages for which it has not yet been done
 	if(pframe->versions.next == NULL && pframe->versions.prev == NULL) {
-		// printk("Initializing versions list\n");
 		mutex_init(&pframe->versions_lock);
 		INIT_LIST_HEAD(&pframe->versions);
 	}
@@ -4600,8 +4596,6 @@ retry_duplication:
 			goto retry_duplication;
 		}
 		
-		printk("%d:%ld non-COW tocttou \n", current->pid, current->op_code);
-
 		list_for_each_entry(version, &pframe->versions, other_nodes) {
 			/* Duplicate for every syscall currently marking this frame
 			* which does not already have a version pframe */
@@ -4617,10 +4611,12 @@ retry_duplication:
 			}
 		}
 		/* Having a NULL dup_pframe here means that none of the entries in the 
-		* pframe's versions list lacked a duplicate. This should not happen,
-		* since the page is marked only when a version is also added to the list
-		* without a duplicate. */
-		/* Edit: It is possible that a syscall finished and removed the version */
+		 * pframe's versions list lacked a duplicate. This should not happen,
+		 * since the page is marked only when a version is also added to the list
+		 * without a duplicate. 
+		 * Btw, we have checked above (within versions_lock mutex) that the 
+		 * PTE has not changed, i.e. the page has not been concurrently 
+		 * unmarked. */
 		BUG_ON(dup_pframe == NULL);
 
 		/* Reverse walk to unmark all virtual pages */

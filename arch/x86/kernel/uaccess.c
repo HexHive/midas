@@ -5,7 +5,7 @@
 #include <linux/uaccess.h>
 #include "../../mm/internal.h"
 
-#define MARKER() printk("Function %s:%d\n", __func__, __LINE__);
+#define MARKER() printk("    %d:%ld:%s:%d\n", current->pid, current->op_code, __func__, __LINE__);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 #define CONFIG_MAX_CORES 4
@@ -105,7 +105,7 @@ int should_mark(void) {
 			return 0;
 	}
 
-    // return 1;
+    return 1;
     
     /* Allowlist for testing */
     switch (current->op_code) {
@@ -180,7 +180,6 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
         }
     }
 
-    // printk("%d:%ld Marked address %px\n", current->pid, current->op_code, (void *)address);
     return true;
 }
 
@@ -228,7 +227,6 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
             up_read(&vma->vm_mm->mmap_lock);
         }
     }
-    // printk("%d:%ld Unmarked address %px\n", current->pid, current->op_code, (void *)address);
     return true;
 }
 EXPORT_SYMBOL(page_unmark_one);
@@ -255,12 +253,11 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 		.rmap_one = page_mark_one,
 		.anon_lock = page_lock_anon_vma_read,
 	};
+    unsigned long ret;
 
     /* Reading within a single page */
     BUG_ON(((src + size - 1) & PAGE_SIZE) != (src & PAGE_SIZE));
     BUG_ON(((dst + size - 1) & PAGE_SIZE) != (dst & PAGE_SIZE));
-
-    if(current->pid > 140 && current->op_code == 231) MARKER();
 
     /* We try this only thrice */
     for(tries = 0; tries < 3; tries++) {
@@ -376,7 +373,8 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         BUG_ON(pframe_vaddr == NULL);
         src = (uintptr_t)pframe_vaddr + (src & ~PAGE_MASK);
 
-        return __raw_copy_from_user((void *)dst, (const void *)src, size);
+        ret = __raw_copy_from_user((void *)dst, (const void *)src, size);
+        return ret;
     }
 
     BUG();
@@ -388,8 +386,6 @@ raw_copy_to_user(void __user *dst, const void *src, unsigned long size) {
     return __raw_copy_to_user(dst, src, size);
 }
 EXPORT_SYMBOL(raw_copy_to_user);
-
-// #if !defined(INLINE_COPY_FROM_USER)
 
 unsigned long __must_check
 raw_copy_from_user(void *dst, const void __user *src, unsigned long size) {
@@ -439,7 +435,6 @@ raw_copy_from_user(void *dst, const void __user *src, unsigned long size) {
         return __raw_copy_from_user(dst, src, size);
 }
 EXPORT_SYMBOL(raw_copy_from_user);
-// #endif /* !defined(INLINE_COPY_FROM_USER) */
 
 void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
@@ -450,9 +445,6 @@ void syscall_marking_cleanup() {
         .rmap_one = page_unmark_one,
         .anon_lock = page_lock_anon_vma_read,
     };
-
-    if(current->pid > 140 && current->op_code == 231) MARKER();
-    // printk("%d:%ld syscall cleanup (%px)\n", current->pid, current->op_code, current);
 
     /* Enabling interrupts to prevent warning when flushing
         * TLBs with smp_call_function_many_cond as part of this rwalk 
@@ -490,7 +482,6 @@ retry_syscall_cleanup:
             /* Reverse walk to unmark all virtual pages */
             rmap_walk(marked_frame->pframe, &rwc);
         }
-        //TODO: Optimization, delete from list first, release lock, then complete stuff
 		list_del(&version->other_nodes);
 		kfree(version);
 
