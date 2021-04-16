@@ -2925,6 +2925,12 @@ void filemap_map_pages(struct vm_fault *vmf,
 	XA_STATE(xas, &mapping->i_pages, start_pgoff);
 	struct page *head, *page;
 	unsigned int mmap_miss = READ_ONCE(file->f_ra.mmap_miss);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+  struct page_marking *marking;
+	struct page_version *version;
+	int count = 0, pteret;
+	pte_t *tmp_pte;
+#endif
 
 	rcu_read_lock();
 	xas_for_each(&xas, head, end_pgoff) {
@@ -2968,8 +2974,48 @@ void filemap_map_pages(struct vm_fault *vmf,
 		if (vmf->pte)
 			vmf->pte += xas.xa_index - last_pgoff;
 		last_pgoff = xas.xa_index;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	mutex_lock(&page->versions_lock);
+	
+	if(!list_empty(&page->versions)){
+		/* Filemap may be called for pages already mapped, since its
+		 * called from do_fault_around. Check if page is marked and 
+		 * that there's a marking in the VMA */
+		list_for_each_entry(marking, &vmf->vma->marked_pages, other_nodes) {
+			if(marking->vaddr == vmf->address)
+				break;
+		}
+		if(&marking->other_nodes != &vmf->vma->marked_pages) {
+			tmp_pte = pte_offset_map(vmf->pmd, vmf->address);
+			BUG_ON(!pte_rmarked(*tmp_pte));
+		} else {
+			// printk("%d:%ld %s:%d address %px page %px %lx %lx", current->pid, current->op_code, __func__, __LINE__, vmf->address, page, start_pgoff, end_pgoff);
+			/* Instead of marking PTE directly, set flag so that entry 
+			* gets marked in alloc_set_pte */
+			vmf->flags |= FAULT_FLAG_TOCTTOU_FILE;
+
+			count = 0;
+			list_for_each_entry(version, &page->versions, other_nodes) {
+				count++;
+			}
+			marking = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+			BUG_ON(marking == NULL);
+			marking->vaddr = vmf->address;
+			marking->owner_count = count;
+			list_add(&marking->other_nodes, &vmf->vma->marked_pages);
+			
+      down_read(&vmf->vma->vm_mm->mmap_lock);
+		}
+	}
+	pteret = alloc_set_pte(vmf, page);
+	vmf->flags &= ~FAULT_FLAG_TOCTTOU_FILE;
+	mutex_unlock(&page->versions_lock);
+	if(pteret)
+		goto unlock;
+#else
 		if (alloc_set_pte(vmf, page))
 			goto unlock;
+#endif
 		unlock_page(head);
 		goto next;
 unlock:

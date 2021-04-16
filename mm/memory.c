@@ -2897,7 +2897,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		
 #ifdef CONFIG_TOCTTOU_PROTECTION
 		entry = vmf->orig_pte;
-		if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(entry) && !pte_rmarked_savedwrite(entry)) {
+		if((vmf->flags & FAULT_FLAG_TOCTTOU_USER) && pte_rmarked(entry) && !pte_rmarked_savedwrite(entry)) {
 			BUG_ON(old_page == NULL);
 			BUG_ON(new_page == NULL);
 			BUG_ON(new_page->versions.next == NULL);
@@ -3982,6 +3982,11 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 	flush_icache_page(vma, page);
 	entry = mk_pte(page, vma->vm_page_prot);
 	entry = pte_sw_mkyoung(entry);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	if(vmf->flags & FAULT_FLAG_TOCTTOU_FILE) 
+		entry = pte_rmark(entry);
+#endif
+
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	/* copy-on-write page */
@@ -4501,6 +4506,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 	struct page *pframe, *dup_pframe = NULL;
+#ifdef CONFIG_TOCTTOU_PROTECTION
 	struct page_version *version;
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
@@ -4509,6 +4515,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			.rmap_one = page_unmark_one,
 			.anon_lock = page_lock_anon_vma_read,
 		};
+#endif
 
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
@@ -4586,7 +4593,7 @@ retry_duplication:
 	 *            previously duplicated. On this fault, duplicate for those tasks
 	 *            which do not have a copy yet, and unmark.
 	 * Only handle the non-COW case here */
-	if((vmf->flags & FAULT_FLAG_TOCTTOU) && pte_rmarked(entry) && pte_rmarked_savedwrite(entry)) {
+	if((vmf->flags & FAULT_FLAG_TOCTTOU_USER) && pte_rmarked(entry) && pte_rmarked_savedwrite(entry)) {
 		mutex_lock(&pframe->versions_lock);	
 
 		/* Slight chance that entry changed between orig_pte was read and now.

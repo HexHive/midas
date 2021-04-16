@@ -1239,7 +1239,7 @@ void do_user_addr_fault(struct pt_regs *regs,
 	struct task_struct *tsk;
 	struct mm_struct *mm;
 	vm_fault_t fault;
-	unsigned int flags = FAULT_FLAG_DEFAULT | FAULT_FLAG_TOCTTOU;
+	unsigned int flags = FAULT_FLAG_DEFAULT | FAULT_FLAG_TOCTTOU_USER;
 
 	tsk = current;
 	mm = tsk->mm;

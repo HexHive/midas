@@ -462,7 +462,8 @@ extern pgprot_t protection_map[16];
  * @FAULT_FLAG_REMOTE: The fault is not for current task/mm.
  * @FAULT_FLAG_INSTRUCTION: The fault was during an instruction fetch.
  * @FAULT_FLAG_INTERRUPTIBLE: The fault can be interrupted by non-fatal signals.
- * @FAULT_FLAG_TOCTTOU: Perform TOCTTOU duplication
+ * @FAULT_FLAG_TOCTTOU_USER: Has gone through do_user_addr_fault
+ * @FAULT_FLAG_TOCTTOU_FILE: Has gone through filemap_map_pages
  *
  * About @FAULT_FLAG_ALLOW_RETRY and @FAULT_FLAG_TRIED: we can specify
  * whether we would allow page faults to retry by specifying these two
@@ -493,7 +494,8 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_REMOTE			0x80
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
-#define FAULT_FLAG_TOCTTOU		0x400
+#define FAULT_FLAG_TOCTTOU_USER		0x400
+#define FAULT_FLAG_TOCTTOU_FILE   0x800
 
 /*
  * The default fault flags that should be used by most of the
@@ -532,7 +534,8 @@ static inline bool fault_flag_allow_retry_first(unsigned int flags)
 	{ FAULT_FLAG_REMOTE,		"REMOTE" }, \
 	{ FAULT_FLAG_INSTRUCTION,	"INSTRUCTION" }, \
 	{ FAULT_FLAG_INTERRUPTIBLE,	"INTERRUPTIBLE" }, \
-	{ FAULT_FLAG_TOCTTOU, "TOCTTOU"}
+	{ FAULT_FLAG_TOCTTOU_USER, "TOCTTOU"}, \
+	{ FAULT_FLAG_TOCTTOU_FILE, "TOCTTOUFILE"}
 
 /*
  * vm_fault is filled by the pagefault handler and passed to the vma's
