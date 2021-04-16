@@ -3572,10 +3572,14 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		marking->vaddr = vmf->address;
 		marking->owner_count = count;
 		list_add(&marking->other_nodes, &vma->marked_pages);
+
+		down_read(&vma->vm_mm->mmap_lock);
 	}
-	mutex_unlock(&page->versions_lock);
-#endif
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
+	mutex_unlock(&page->versions_lock);
+#else
+	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
+#endif
 	arch_do_swap_page(vma->vm_mm, vma, vmf->address, pte, vmf->orig_pte);
 	vmf->orig_pte = pte;
 
