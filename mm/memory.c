@@ -4509,8 +4509,8 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
 static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
-	struct page *pframe, *dup_pframe = NULL;
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	struct page *pframe, *dup_pframe = NULL;
 	struct page_version *version;
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
