@@ -2454,6 +2454,11 @@ ssize_t generic_file_buffered_read(struct kiocb *iocb,
 	int i, pg_nr, error = 0;
 	bool writably_mapped;
 	loff_t isize, end_offset;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	int j;
+	struct page *page;
+	struct page_version *version;
+#endif
 
 	if (unlikely(iocb->ki_pos >= inode->i_sb->s_maxbytes))
 		return 0;
@@ -2489,6 +2494,26 @@ ssize_t generic_file_buffered_read(struct kiocb *iocb,
 			break;
 		}
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		for(j = 0; j < pg_nr; j++){
+			page = pages[j];
+			/* Not user page, so high chance that it has not been initialized */
+			if(page->versions.next == NULL && page->versions.prev == NULL) {
+				mutex_init(&page->versions_lock);
+				INIT_LIST_HEAD(&page->versions);
+			}
+			/* Testing an assumption. There should not be vfs_read call in
+			 * same syscall which marks this page via raw_copy_from_user.
+			 * Can be removed in evaluation version. */
+			mutex_lock(&page->versions_lock);
+			if(!list_empty(&page->versions)){
+				list_for_each_entry(version, &page->versions, other_nodes) {
+					BUG_ON(version->task == current);
+				}
+			}
+			mutex_unlock(&page->versions_lock);
+		}
+#endif
 		/*
 		 * i_size must be checked after we know the pages are Uptodate.
 		 *

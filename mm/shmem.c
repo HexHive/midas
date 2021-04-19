@@ -2575,6 +2575,9 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	int error = 0;
 	ssize_t retval = 0;
 	loff_t *ppos = &iocb->ki_pos;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	struct page_version *version;
+#endif
 
 	/*
 	 * Might this read be for a stacking filesystem?  Then when reading
@@ -2609,6 +2612,23 @@ static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 			break;
 		}
 		if (page) {
+#ifdef CONFIG_TOCTTOU_PROTECTION
+			/* Not user page, so high chance that it has not been initialized */
+			if(page->versions.next == NULL && page->versions.prev == NULL) {
+				mutex_init(&page->versions_lock);
+				INIT_LIST_HEAD(&page->versions);
+			}
+			/* Testing an assumption. There should not be vfs_read call in
+			 * same syscall which marks this page via raw_copy_from_user.
+			 * Can be removed in evaluation version. */
+			mutex_lock(&page->versions_lock);
+			if(!list_empty(&page->versions)){
+				list_for_each_entry(version, &page->versions, other_nodes) {
+					BUG_ON(version->task == current);
+				}
+			}
+			mutex_unlock(&page->versions_lock);
+#endif
 			if (sgp == SGP_CACHE)
 				set_page_dirty(page);
 			unlock_page(page);
