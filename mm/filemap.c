@@ -3447,6 +3447,17 @@ ssize_t generic_perform_write(struct file *file,
 	long status = 0;
 	ssize_t written = 0;
 	unsigned int flags = 0;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	struct page *dup_pframe = NULL;
+	struct page_version *version;
+	int owner_release_count = 0;
+	/* Pre-setup for structure which walks reverse mappings for a frame */
+	struct rmap_walk_control rwc = { 
+			.arg = &owner_release_count,
+			.rmap_one = page_unmark_one,
+			.anon_lock = page_lock_anon_vma_read,
+		};
+#endif
 
 	do {
 		struct page *page;
@@ -3485,6 +3496,52 @@ again:
 		if (unlikely(status < 0))
 			break;
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		if(page) {
+			/* Not user page, so high chance that it has not been initialized */
+			if(page->versions.next == NULL && page->versions.prev == NULL) {
+				mutex_init(&page->versions_lock);
+				INIT_LIST_HEAD(&page->versions);
+			}
+			mutex_lock(&page->versions_lock);
+			if(!list_empty(&page->versions)) {
+				if(current->pid > 148)
+					printk("%d:%ld %s:%d\n", current->pid, current->op_code, __func__, __LINE__);
+				
+				list_for_each_entry(version, &page->versions, other_nodes) {
+					/* Testing an assumption. There should not be vfs_write call in
+					* same syscall which marks this page via raw_copy_from_user.
+					* Can be removed in evaluation version. */
+					//TODO: remove test
+					BUG_ON(version->task == current);
+
+					/* Duplicate for every syscall currently marking this frame
+					* which does not already have a version pframe */
+					if(version->pframe == NULL) {
+						if(!dup_pframe){
+							dup_pframe = tocttou_duplicate_page_alloc(); 
+							BUG_ON(dup_pframe == NULL);
+							memcpy(page_address(dup_pframe), page_address(page), PAGE_SIZE);
+						} 
+						dup_pframe->version_refcount++;
+						version->pframe = dup_pframe;
+						owner_release_count++;
+					}
+				}
+				/* Having a NULL dup_pframe here means that none of the entries in the 
+				* pframe's versions list lacked a duplicate. This should not happen,
+				* since the page is marked only when a version is also added to the list
+				* without a duplicate. 
+				* Btw, we have checked above (within versions_lock mutex) that the 
+				* PTE has not changed, i.e. the page has not been concurrently 
+				* unmarked. */
+				BUG_ON(dup_pframe == NULL);
+				/* Reverse walk to unmark all virtual pages */
+				rmap_walk(page, &rwc);
+			}
+			mutex_unlock(&page->versions_lock);
+		}
+#endif
 		if (mapping_writably_mapped(mapping))
 			flush_dcache_page(page);
 
