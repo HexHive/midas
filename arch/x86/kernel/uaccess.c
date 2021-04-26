@@ -362,7 +362,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             if (iter_version->pframe == NULL) /* Marked, unduplicated: Reading from original pframe */
                 pframe_copy = pframe;
             else                              /* Marked, duplicated: Read from iter_version's pframe */
-                pframe_copy = page_address(iter_version->pframe);
+                pframe_copy = iter_version->pframe;
 
         }
         mutex_unlock(&pframe->versions_lock);
