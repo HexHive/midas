@@ -8,7 +8,7 @@
 #define MARKER() printk("    %d:%ld:%s:%d\n", current->pid, current->op_code, __func__, __LINE__);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-#define CONFIG_MAX_CORES 4
+#define CONFIG_MAX_SHARING 128
 
 void *tocttou_duplicate_page_alloc()
 {
@@ -156,14 +156,14 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             /* Find an available buffer, and take it. 
              * Mark acquisition by NULLing that space */
             spaces = arg;
-            for(i = 0; i < CONFIG_MAX_CORES; i++){
+            for(i = 0; i < CONFIG_MAX_SHARING; i++){
                 marking = spaces[i];
                 if(marking) {
                     spaces[i] = NULL; 
                     break;
                 }
             }
-            BUG_ON(i == CONFIG_MAX_CORES);
+            BUG_ON(i == CONFIG_MAX_SHARING);
             marking->vaddr = address;
             marking->owner_count = 1;
             list_add(&marking->other_nodes, &vma->marked_pages);
@@ -244,7 +244,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     pmd_t *pmd;
     pte_t *ptep, pte;
     struct page *pframe, *pframe_copy;
-    void *pframe_vaddr, *new_marking_space[CONFIG_MAX_CORES];
+    void *pframe_vaddr, *new_marking_space[CONFIG_MAX_SHARING];
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
     /* Pre-setup for structure which walks reverse mappings for a frame */
@@ -348,13 +348,13 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
              * Space allocated here. If not used, freed after the rmap_walk.
              * If needed during page_mark_one, added to VMA marked_pages list. 
              * Then freed during page_unmark_one. */
-            for(i = 0; i < CONFIG_MAX_CORES; i++){
+            for(i = 0; i < CONFIG_MAX_SHARING; i++){
                 new_marking_space[i] = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
                 BUG_ON(new_marking_space[i] == NULL);
             }
             rwc.arg = &new_marking_space;
             rmap_walk(pframe, &rwc);
-            for(i = 0; i < CONFIG_MAX_CORES; i++)
+            for(i = 0; i < CONFIG_MAX_SHARING; i++)
                 if(new_marking_space[i]) 
                     kfree(new_marking_space[i]);
 
