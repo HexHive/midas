@@ -130,9 +130,10 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		.vma = vma,
 		.address = address,
 	};
-
-
     int count = 0;
+    struct mm_struct *mm = vma->vm_mm;
+    BUG_ON(mm == NULL);
+
     while (page_vma_mapped_walk(&pvmw)) {
         BUG_ON(count != 0);
         count++;
@@ -142,14 +143,15 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
         if (!pte_present(entry))
             continue;
 
+        mutex_lock(&mm->marked_pages_lock);
         if (pte_rmarked(entry)) {
-            list_for_each_entry(marking, &vma->marked_pages, other_nodes) {
+            list_for_each_entry(marking, &mm->marked_pages, other_nodes) {
                 if(marking->vaddr == address) {
                     break;
                 }
             }
             /* Bug if metadata not found */
-            BUG_ON(&marking->other_nodes == &vma->marked_pages);
+            BUG_ON(&marking->other_nodes == &mm->marked_pages);
             marking->owner_count++;
         } else { /* Not marked yet, will mark */
 
@@ -166,18 +168,13 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             BUG_ON(i == CONFIG_MAX_SHARING);
             marking->vaddr = address;
             marking->owner_count = 1;
-            list_add(&marking->other_nodes, &vma->marked_pages);
-            /* Add a 'reader' to mmap_lock for every marked page in the VMA.
-             * This ensures that the VMAs will not change (split/merge)
-             * until there are no markings in the address space.
-             * Operations that change VMAs should be part of the setup phase
-             * of programs, and not affect their main runtime */
-            down_read(&vma->vm_mm->mmap_lock);
+            list_add(&marking->other_nodes, &mm->marked_pages);
 
             /* Marking at the actual page tables */
-            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_rmark(entry));
+            set_pte_at(mm, pvmw.address, ppte, pte_rmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
+        mutex_unlock(&mm->marked_pages_lock);
     }
 
     return true;
@@ -194,6 +191,8 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 		.address = address,
 	};
     int tmp_owner_count, n_owners_released = *(int *)arg;
+    struct mm_struct *mm = vma->vm_mm;
+    BUG_ON(mm == NULL);
 
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
@@ -203,13 +202,14 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 
         BUG_ON(!pte_rmarked(entry));
 
-        list_for_each_entry(marking, &vma->marked_pages, other_nodes) {
+        mutex_lock(&mm->marked_pages_lock);
+        list_for_each_entry(marking, &mm->marked_pages, other_nodes) {
             if(marking->vaddr == address) {
                 break;
             }
         }
         /* Bug if metadata not found */
-        BUG_ON(&marking->other_nodes == &vma->marked_pages);
+        BUG_ON(&marking->other_nodes == &mm->marked_pages);
         
         /* Release node from markings list when last owner */
         tmp_owner_count = marking->owner_count;
@@ -219,13 +219,10 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
         if(tmp_owner_count == 0) {
             list_del(&marking->other_nodes);
             kfree(marking);
-            set_pte_at(vma->vm_mm, pvmw.address, ppte, pte_runmark(entry));
+            set_pte_at(mm, pvmw.address, ppte, pte_runmark(entry));
 			flush_tlb_page(vma, pvmw.address);
-            /* Release 'readers' for the VMA's address space. When there are 
-            * no markings for the address space, it can be modified, allowing
-            * split/merge of VMAs */
-            up_read(&vma->vm_mm->mmap_lock);
         }
+        mutex_unlock(&mm->marked_pages_lock);
     }
     return true;
 }
@@ -261,11 +258,9 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
     /* We try this only thrice */
     for(tries = 0; tries < 3; tries++) {
-        down_read(&current->mm->mmap_lock);
 
         pgd = pgd_offset(current->mm, src);
         if(!pgd_present(*pgd)) {
-            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -273,7 +268,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         p4d = p4d_offset(pgd, src);
         if(!p4d_present(*p4d)) {
-            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -281,7 +275,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         pud = pud_offset(p4d, src);
         if(!pud_present(*pud)) {
-            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -289,7 +282,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         pmd = pmd_offset(pud, src);
         if(!pmd_present(*pmd)) {
-            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -297,7 +289,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
         ptep = pte_offset_map(pmd, src);
         if(!pte_present(*ptep)) {
-            up_read(&current->mm->mmap_lock);
             mm_populate(src & PAGE_MASK, PAGE_SIZE);
             /* Try again from scratch */
             continue;
@@ -314,6 +305,10 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         mark_page_accessed(pframe);
 
         mutex_lock(&pframe->versions_lock);
+        if(!pte_same(pte, *ptep)) {
+            mutex_unlock(&pframe->versions_lock);
+            continue;
+        }
         mutex_lock(&current->markings_lock);
         /* Check the list of duplicates for the frame to see if there is one corresponding to 
          * this syscall */
@@ -328,7 +323,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             if(new_marked_version == NULL){
                 mutex_unlock(&pframe->versions_lock);
                 mutex_unlock(&current->markings_lock);
-                up_read(&current->mm->mmap_lock);
                 return size;
             }
             new_marked_version->task = current;
@@ -367,7 +361,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         }
         mutex_unlock(&pframe->versions_lock);
         mutex_unlock(&current->markings_lock);
-        up_read(&current->mm->mmap_lock);
 
         pframe_vaddr = page_address(pframe_copy);
         BUG_ON(pframe_vaddr == NULL);
@@ -452,7 +445,6 @@ void syscall_marking_cleanup() {
     irq_dis = irqs_disabled();
     local_irq_enable();
 
-    down_read(&current->mm->mmap_lock);
 retry_syscall_cleanup:
 	/* Reset the system call information */	
     mutex_lock(&current->markings_lock);
@@ -490,7 +482,6 @@ retry_syscall_cleanup:
 		kfree(marked_frame);
 	}
     mutex_unlock(&current->markings_lock);
-    up_read(&current->mm->mmap_lock);
 
     if(irq_dis)
         local_irq_disable();

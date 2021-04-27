@@ -3571,9 +3571,9 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		marking = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
 		marking->vaddr = vmf->address;
 		marking->owner_count = count;
-		list_add(&marking->other_nodes, &vma->marked_pages);
-
-		down_read(&vma->vm_mm->mmap_lock);
+		mutex_lock(&vma->vm_mm->marked_pages_lock);
+		list_add(&marking->other_nodes, &vma->vm_mm->marked_pages);
+		mutex_unlock(&vma->vm_mm->marked_pages_lock);
 	}
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
 	mutex_unlock(&page->versions_lock);

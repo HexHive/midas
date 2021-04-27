@@ -2729,7 +2729,6 @@ int __split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long addr, int new_below)
 {
 	struct vm_area_struct *new;
-	struct page_marking *marking, *next;
 	int err;
 
 	if (vma->vm_ops && vma->vm_ops->may_split) {
@@ -2770,17 +2769,8 @@ int __split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
 		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
 
 	/* Success. */
-	if (!err) {
-		/* Move relevant marked_pages to new VMA */
-
-		list_for_each_entry_safe(marking, next, &vma->marked_pages, other_nodes) {
-			if((marking->vaddr >= new->vm_start) && (marking->vaddr < new->vm_end)) {
-				list_del(&marking->other_nodes);
-				list_add(&marking->other_nodes, &new->marked_pages);
-			}
-		}
+	if (!err) 
 		return 0;
-	}
 
 	/* Clean everything up if vma_adjust failed. */
 	if (new->vm_ops && new->vm_ops->close)

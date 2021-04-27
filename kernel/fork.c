@@ -364,7 +364,6 @@ struct vm_area_struct *vm_area_dup(struct vm_area_struct *orig)
 		 */
 		*new = data_race(*orig);
 		INIT_LIST_HEAD(&new->anon_vma_chain);
-		INIT_LIST_HEAD(&new->marked_pages);
 		new->vm_next = new->vm_prev = NULL;
 	}
 	return new;
@@ -1034,6 +1033,10 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	init_tlb_flush_pending(mm);
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !USE_SPLIT_PMD_PTLOCKS
 	mm->pmd_huge_pte = NULL;
+#endif
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	INIT_LIST_HEAD(&mm->marked_pages);
+	mutex_init(&mm->marked_pages_lock);
 #endif
 	mm_init_uprobes_state(mm);
 

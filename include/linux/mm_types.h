@@ -395,11 +395,6 @@ struct vm_area_struct {
 	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
-
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	/* List of marked pages, storing their marked count */
-	struct list_head marked_pages;
-#endif
 } __randomize_layout;
 
 struct core_thread {
@@ -591,6 +586,12 @@ struct mm_struct {
 
 #ifdef CONFIG_IOMMU_SUPPORT
 		u32 pasid;
+#endif
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	/* List of marked pages, storing their marked count */
+	struct list_head marked_pages;
+	struct mutex marked_pages_lock;
 #endif
 	} __randomize_layout;
 
