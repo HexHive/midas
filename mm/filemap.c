@@ -3506,8 +3506,6 @@ again:
 			}
 			mutex_lock(&page->versions_lock);
 			if(!list_empty(&page->versions)) {
-				if(current->pid > 148)
-					printk("%d:%ld %s:%d\n", current->pid, current->op_code, __func__, __LINE__);
 				
 				list_for_each_entry(version, &page->versions, other_nodes) {
 					/* Testing an assumption. There should not be vfs_write call in

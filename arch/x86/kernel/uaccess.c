@@ -254,10 +254,10 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
     /* Reading within a single page */
     BUG_ON(((src + size - 1) & PAGE_SIZE) != (src & PAGE_SIZE));
-    BUG_ON(((dst + size - 1) & PAGE_SIZE) != (dst & PAGE_SIZE));
+    // BUG_ON(((dst + size - 1) & PAGE_SIZE) != (dst & PAGE_SIZE));
 
     /* We try this only thrice */
-    for(tries = 0; tries < 3; tries++) {
+    for(tries = 0; tries < 4; tries++) {
 
         pgd = pgd_offset(current->mm, src);
         if(!pgd_present(*pgd)) {
@@ -370,7 +370,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         return ret;
     }
 
-    BUG();
+    // BUG();
     return size;
 }
 
