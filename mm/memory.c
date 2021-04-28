@@ -856,8 +856,20 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	unsigned long vm_flags = src_vma->vm_flags;
 	pte_t pte = *src_pte;
 	struct page *page;
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	int marked = pte_rmarked(pte);
+	struct mm_struct *mm = dst_vma->vm_mm;
+	struct page_marking *marking;
+	struct page_version *version;
+	int count;
+#endif
 
 	page = vm_normal_page(src_vma, addr, pte);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	/* I hope marked pages should be normal */
+	BUG_ON(marked && !page);
+	// BUG_ON(!marked && !pte_write(pte) && (vm_flags && VM_MAYWRITE) && !is_cow_mapping(vm_flags));
+#endif
 	if (page) {
 		int retval;
 
@@ -865,7 +877,21 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 					   addr, rss, prealloc, pte, page);
 		if (retval <= 0)
 			return retval;
+		
+		if (marked){
+			mutex_lock(&page->versions_lock);
+			count = 0;
+			list_for_each_entry(version, &page->versions, other_nodes) {
+				if(version->pframe == NULL)
+					count++;
+			}
+			BUG_ON(count == 0);
 
+			marking = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+			marking->vaddr = addr;
+			marking->owner_count = count;
+			list_add(&marking->other_nodes, &mm->marked_pages);
+		}
 		get_page(page);
 		page_dup_rmap(page, false);
 		rss[mm_counter(page)]++;
@@ -876,6 +902,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	 * in the parent and the child
 	 */
 	if (is_cow_mapping(vm_flags) && pte_write(pte)) {
+		BUG_ON(marked);
 		ptep_set_wrprotect(src_mm, addr, src_pte);
 		pte = pte_wrprotect(pte);
 	}
@@ -896,6 +923,11 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	if (!(vm_flags & VM_UFFD_WP))
 		pte = pte_clear_uffd_wp(pte);
 
+	/* If marked, has page. Also, if it reached here, copy_present_page 
+	 * returned > 0. Therefore, mutex was definitely locked, and rmap_dup called. */
+	if(marked) {
+		mutex_unlock(&page->versions_lock);
+	}
 	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
 	return 0;
 }
