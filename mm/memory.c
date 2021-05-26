@@ -923,12 +923,12 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	if (!(vm_flags & VM_UFFD_WP))
 		pte = pte_clear_uffd_wp(pte);
 
+	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
 	/* If marked, has page. Also, if it reached here, copy_present_page 
 	 * returned > 0. Therefore, mutex was definitely locked, and rmap_dup called. */
 	if(marked) {
 		mutex_unlock(&page->versions_lock);
 	}
-	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
 	return 0;
 }
 
@@ -2924,6 +2924,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	/*
 	 * Re-check the pte - we dropped the lock
 	 */
+retry_wp_page_copy:
 	vmf->pte = pte_offset_map_lock(mm, vmf->pmd, vmf->address, &vmf->ptl);
 	if (likely(pte_same(*vmf->pte, vmf->orig_pte))) {
 		
@@ -2941,7 +2942,10 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 			old_pframe = old_page;
 			new_pframe = new_page;
 			is_cow_tocttou = 1;
-			mutex_lock(&old_pframe->versions_lock);
+			if(mutex_trylock(&old_pframe->versions_lock) == 0) {
+				spin_unlock(vmf->ptl);
+				goto retry_wp_page_copy;
+			}
 			mutex_lock(&new_pframe->versions_lock);
 		}
 #endif   /* CONFIG_TOCTTOU_PROTECTION */
