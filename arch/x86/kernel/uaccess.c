@@ -175,6 +175,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 			flush_tlb_page(vma, pvmw.address);
         }
         mutex_unlock(&mm->marked_pages_lock);
+        page_vma_mapped_walk_done(&pvmw);
     }
 
     return true;
@@ -223,6 +224,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
 			flush_tlb_page(vma, pvmw.address);
         }
         mutex_unlock(&mm->marked_pages_lock);
+        page_vma_mapped_walk_done(&pvmw);
     }
     return true;
 }

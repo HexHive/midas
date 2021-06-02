@@ -2953,7 +2953,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 #ifdef CONFIG_TOCTTOU_PROTECTION
   struct page_marking *marking;
 	struct page_version *version;
-	int count = 0, pteret;
+	int count = 0, pteret, page_init_here = 0;
 	pte_t *tmp_pte;
 	struct mm_struct *mm;
 #endif
@@ -3001,9 +3001,19 @@ void filemap_map_pages(struct vm_fault *vmf,
 			vmf->pte += xas.xa_index - last_pgoff;
 		last_pgoff = xas.xa_index;
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	BUG_ON(page == NULL);
+	/* Hacky solution attempt for crashes within the following 
+	 * mutex lock for page->versions_lock */
+	//TODO: Atri Have better page initialization
+	if(page->versions.next == NULL && page->versions.prev == NULL) {
+		mutex_init(&page->versions_lock);
+		INIT_LIST_HEAD(&page->versions);
+		page_init_here = 1;
+	}
 	mutex_lock(&page->versions_lock);
 	
 	if(!list_empty(&page->versions)){
+		BUG_ON(page_init_here);
 		mm = vmf->vma->vm_mm;
 		mutex_lock(&mm->marked_pages_lock);
 		/* Filemap may be called for pages already mapped, since its

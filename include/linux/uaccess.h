@@ -105,7 +105,7 @@ __copy_from_user_inatomic(void *to, const void __user *from, unsigned long n)
 {
 	instrument_copy_from_user(to, from, n);
 	check_object_size(to, n, false);
-	return raw_copy_from_user(to, from, n);
+	return __raw_copy_from_user(to, from, n);
 }
 
 static __always_inline __must_check unsigned long
