@@ -980,8 +980,10 @@ copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	struct page_marking *prealloc_page_marking[page_count];
 	int marking_count;
 	/* Prealloc markings for all pages that might get marked */
-	for(marking_count = 0; marking_count < page_count; marking_count++)
-					prealloc_page_marking[marking_count] = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+	for(marking_count = 0; marking_count < page_count; marking_count++) {
+		prealloc_page_marking[marking_count] = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+		BUG_ON(prealloc_page_marking[marking_count] == NULL);
+	}
 	marking_count = 0;
 #endif
 
@@ -1085,9 +1087,11 @@ out:
 	if (unlikely(prealloc))
 		put_page(prealloc);
 #ifdef CONFIG_TOCTTOU_PROTECTION
-  for(marking_count = 0; marking_count < page_count; marking_count++)
-		if(prealloc_page_marking[marking_count] != NULL)
-			kfree(prealloc_page_marking[marking_count]);
+	// printk("Consumed %d out of %d prealloc markings\n", marking_count, page_count);
+  for(; marking_count < page_count; marking_count++) {
+		BUG_ON(prealloc_page_marking[marking_count] == NULL);
+		kfree(prealloc_page_marking[marking_count]);
+	}
 #endif
 
 	return ret;
