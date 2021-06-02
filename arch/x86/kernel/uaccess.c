@@ -47,6 +47,9 @@ int should_mark(void) {
 		return 0;
 	}
 
+    if (current->op_code < 0)
+        return 0;
+
     /* Here we ignore certain calls. Before benchmarking, make sure that the
 	 * appropriate calls are uncommented. Alternately, you can add a preprocessor constant
 	 * for different call groups
@@ -101,8 +104,8 @@ int should_mark(void) {
 		case __NR_munmap:
 		case __NR_getsockname:
 		case __NR_times:*/
-		case -1:
-			return 0;
+		// case -1:
+		// 	return 0;
 	}
 
     return 1;
