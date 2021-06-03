@@ -323,11 +323,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         if(&iter_version->other_nodes == &pframe->versions) {  /* Unmarked, unduplicated: Add to pframe */
             
             new_marked_version = (struct page_version *)kzalloc(sizeof(struct page_version), GFP_KERNEL);
-            if(new_marked_version == NULL){
-                mutex_unlock(&pframe->versions_lock);
-                mutex_unlock(&current->markings_lock);
-                return size;
-            }
+            BUG_ON(new_marked_version == NULL);
             new_marked_version->task = current;
             new_marked_version->pframe = NULL;
             /* New version for the page frame */
