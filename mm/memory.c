@@ -940,7 +940,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	/* If marked, has page. Also, if it reached here, copy_present_page 
 	 * returned > 0. Therefore, mutex was definitely locked, and rmap_dup called. */
-	if(marked) {
+	if(page && marked) {
 		mutex_unlock(&mm->marked_pages_lock);
 		mutex_unlock(&page->versions_lock);
 	}

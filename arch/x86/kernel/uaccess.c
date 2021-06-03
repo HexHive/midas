@@ -176,7 +176,6 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             set_pte_at(mm, pvmw.address, ppte, pte_rmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
-        page_vma_mapped_walk_done(&pvmw);
     }
     mutex_unlock(&mm->marked_pages_lock);
 
@@ -223,7 +222,6 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
             set_pte_at(mm, pvmw.address, ppte, pte_runmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
-        page_vma_mapped_walk_done(&pvmw);
     }
     mutex_unlock(&mm->marked_pages_lock);
     return true;
