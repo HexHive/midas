@@ -3025,6 +3025,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 		}
 		if(&marking->other_nodes != &mm->marked_pages) {
 			tmp_pte = pte_offset_map(vmf->pmd, vmf->address);
+			BUG_ON(vmf->flags & FAULT_FLAG_TOCTTOU_FILE);
 			BUG_ON(!pte_rmarked(*tmp_pte));
 		} else {
 			/* Instead of marking PTE directly, set flag so that entry 

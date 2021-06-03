@@ -897,7 +897,10 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 			*marking_ptr = NULL;
 			marking->vaddr = addr;
 			marking->owner_count = count;
+			if(mutex_trylock(&mm->marked_pages_lock) == 0)
+				BUG();
 			list_add(&marking->other_nodes, &mm->marked_pages);
+			mutex_unlock(&mm->marked_pages_lock);
 		}
 #endif
 		get_page(page);
@@ -3095,16 +3098,16 @@ retry_wp_page_copy:
 				list_for_each_entry(marking, &task->marked_frames, other_nodes) {
 					if(marking->pframe == old_pframe) {
 						marking->pframe = new_pframe;
-						updated_marking = 1;
+						updated_marking += 1;
 					}
 				}
 				/* Old pframe has a version for this task. The task *must* have 
 				 * one corresponding marked frame in its list, thus must have updated
 				 * it */
 				BUG_ON(updated_marking != 1);
-				mutex_unlock(&task->markings_lock);
 
 				list_move(&version->other_nodes, &new_pframe->versions);
+				mutex_unlock(&task->markings_lock);
 				owner_release_count++;
 			} else
 				owner_retained_count++;

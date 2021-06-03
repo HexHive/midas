@@ -335,6 +335,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 
             /* New marked frame for this syscall */
             new_marked_pframe = (struct marked_frame *)kzalloc(sizeof(struct marked_frame), GFP_KERNEL);
+            BUG_ON(new_marked_pframe == NULL);
             new_marked_pframe->pframe = pframe;
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
             pframe_copy = pframe;
