@@ -74,10 +74,10 @@ int should_mark(void) {
 		// These calls were added as an optimization
 		// The OS usually is not interested in the content of write calls, so
 		// they do not need to be protected
-		// case __NR_writev:
-		// case __NR_pwrite64:
-		// case __NR_pwritev2:
-		// case __NR_write:
+		case __NR_writev:
+		case __NR_pwrite64:
+		case __NR_pwritev2:
+		case __NR_write:
 			return 0;
 		
 		/*
@@ -143,8 +143,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		ppte = pvmw.pte;
 
         entry = *ppte;
-        if (!pte_present(entry))
-            continue;
+        BUG_ON(!pte_present(entry));
 
         mutex_lock(&mm->marked_pages_lock);
         if (pte_rmarked(entry)) {
@@ -201,8 +200,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
         entry = *ppte;
-        if(!pte_present(entry))
-            continue;
+        BUG_ON(!pte_present(entry));
 
         BUG_ON(!pte_rmarked(entry));
 
