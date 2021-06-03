@@ -136,6 +136,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
     int count = 0;
     struct mm_struct *mm = vma->vm_mm;
     BUG_ON(mm == NULL);
+    mutex_lock(&mm->marked_pages_lock);
 
     while (page_vma_mapped_walk(&pvmw)) {
         BUG_ON(count != 0);
@@ -145,7 +146,6 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
         entry = *ppte;
         BUG_ON(!pte_present(entry));
 
-        mutex_lock(&mm->marked_pages_lock);
         if (pte_rmarked(entry)) {
             list_for_each_entry(marking, &mm->marked_pages, other_nodes) {
                 if(marking->vaddr == address) {
@@ -176,9 +176,9 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             set_pte_at(mm, pvmw.address, ppte, pte_rmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
-        mutex_unlock(&mm->marked_pages_lock);
         page_vma_mapped_walk_done(&pvmw);
     }
+    mutex_unlock(&mm->marked_pages_lock);
 
     return true;
 }
@@ -196,15 +196,14 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
     int tmp_owner_count, n_owners_released = *(int *)arg;
     struct mm_struct *mm = vma->vm_mm;
     BUG_ON(mm == NULL);
+    mutex_lock(&mm->marked_pages_lock);
 
     while (page_vma_mapped_walk(&pvmw)) {
         ppte = pvmw.pte;
         entry = *ppte;
         BUG_ON(!pte_present(entry));
-
         BUG_ON(!pte_rmarked(entry));
 
-        mutex_lock(&mm->marked_pages_lock);
         list_for_each_entry(marking, &mm->marked_pages, other_nodes) {
             if(marking->vaddr == address) {
                 break;
@@ -224,9 +223,9 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
             set_pte_at(mm, pvmw.address, ppte, pte_runmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
-        mutex_unlock(&mm->marked_pages_lock);
         page_vma_mapped_walk_done(&pvmw);
     }
+    mutex_unlock(&mm->marked_pages_lock);
     return true;
 }
 EXPORT_SYMBOL(page_unmark_one);

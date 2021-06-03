@@ -2953,7 +2953,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 #ifdef CONFIG_TOCTTOU_PROTECTION
   struct page_marking *marking;
 	struct page_version *version;
-	int count = 0, pteret, page_init_here = 0;
+	int count = 0, pteret, page_init_here = 0, marking_locked = 0;
 	pte_t *tmp_pte;
 	struct mm_struct *mm;
 #endif
@@ -3016,6 +3016,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 		BUG_ON(page_init_here);
 		mm = vmf->vma->vm_mm;
 		mutex_lock(&mm->marked_pages_lock);
+		marking_locked = 1;
 		/* Filemap may be called for pages already mapped, since its
 		 * called from do_fault_around. Check if page is marked and 
 		 * that there's a marking in the VMA */
@@ -3042,11 +3043,14 @@ void filemap_map_pages(struct vm_fault *vmf,
 			marking->owner_count = count;
 			list_add(&marking->other_nodes, &mm->marked_pages);
 		}
-		mutex_unlock(&mm->marked_pages_lock);
+		
 	}
 	pteret = alloc_set_pte(vmf, page);
-	vmf->flags &= ~FAULT_FLAG_TOCTTOU_FILE;
+	if(marking_locked)
+		mutex_unlock(&mm->marked_pages_lock);
 	mutex_unlock(&page->versions_lock);
+	vmf->flags &= ~FAULT_FLAG_TOCTTOU_FILE;
+	marking_locked = 0;
 	if(pteret)
 		goto unlock;
 #else
