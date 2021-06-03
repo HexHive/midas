@@ -884,7 +884,8 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		
 #ifdef CONFIG_TOCTTOU_PROTECTION
 		if (marked){
-			mutex_lock(&page->versions_lock);
+			if(mutex_trylock(&page->versions_lock) == 0)
+				return -EAGAIN;
 			count = 0;
 			list_for_each_entry(version, &page->versions, other_nodes) {
 				if(version->pframe == NULL)
@@ -1078,7 +1079,8 @@ again:
 		entry.val = 0;
 	} else if (ret) {
 		WARN_ON_ONCE(ret != -EAGAIN);
-		prealloc = page_copy_prealloc(src_mm, src_vma, addr);
+		if (!prealloc)
+			prealloc = page_copy_prealloc(src_mm, src_vma, addr);
 		if (!prealloc)
 			return -ENOMEM;
 		/* We've captured and resolved the error. Reset, try again. */
