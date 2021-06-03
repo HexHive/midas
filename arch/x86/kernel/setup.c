@@ -48,6 +48,13 @@
 #include <asm/unwind.h>
 #include <asm/vsyscall.h>
 #include <linux/vmalloc.h>
+#ifdef CONFIG_TOCTTOU_PROTECTION
+#include <linux/uaccess.h>
+
+void __init arch_call_rest_init(void) {
+	tocttou_cache_init();
+}
+#endif
 
 /*
  * max_low_pfn_mapped: highest directly mapped pfn < 4 GB

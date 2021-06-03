@@ -12,6 +12,10 @@
 #include <asm/smap.h>
 #include <asm/extable.h>
 
+#ifdef CONFIG_TOCTTOU_PROTECTION
+void tocttou_cache_init(void);
+#endif
+
 /*
  * Test whether a block of memory is a valid user space address.
  * Returns 0 if the range is valid, nonzero otherwise.

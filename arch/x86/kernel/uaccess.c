@@ -10,11 +10,16 @@
 #ifdef CONFIG_TOCTTOU_PROTECTION
 #define CONFIG_MAX_SHARING 128
 
+void *tocttou_duplicate_page_cache;
+void tocttou_cache_init(void) {
+    tocttou_duplicate_page_cache = kmem_cache_create("tocttou_dup_page", PAGE_SIZE, PAGE_SIZE, SLAB_POISON, NULL);
+    BUG_ON(!tocttou_duplicate_page_cache);
+}
+
 void *tocttou_duplicate_page_alloc()
 {
-    // TODO: Set up duplicate page cache
-	// return kmem_cache_alloc(tocttou_duplicate_page_cache, GFP_KERNEL);
-    struct page *pframe = alloc_page(GFP_USER);
+    struct page *pframe = kmem_cache_alloc(tocttou_duplicate_page_cache, GFP_NOWAIT); 
+    BUG_ON(!pframe);
     pframe->version_refcount = 0;
     return pframe;
 }
@@ -23,8 +28,7 @@ void tocttou_duplicate_page_free(struct page *pframe)
 {
     BUG_ON(pframe->version_refcount != 0);
     // TODO: Set up duplicate page cache
-	// kmem_cache_free(tocttou_duplicate_page_cache, page);
-    __free_page(pframe);
+	kmem_cache_free(tocttou_duplicate_page_cache, page);
 }
 
 /* Every instance of syscall requires an identifier */
@@ -367,7 +371,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         return ret;
     }
 
-    // BUG();
     return size;
 }
 
