@@ -3476,7 +3476,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 #ifdef CONFIG_TOCTTOU_PROTECTION
   struct page_marking *marking;
 	struct page_version *version;
-	int count = 0;
+	int count = 0, marked = 0;
 #endif
 
 	if (!pte_unmap_same(vma->vm_mm, vmf->pmd, vmf->pte, vmf->orig_pte))
@@ -3644,15 +3644,18 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		list_for_each_entry(version, &page->versions, other_nodes) {
 			count++;
 		}
+		marked = 1;
 		marking = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
 		marking->vaddr = vmf->address;
 		marking->owner_count = count;
 		mutex_lock(&vma->vm_mm->marked_pages_lock);
 		list_add(&marking->other_nodes, &vma->vm_mm->marked_pages);
-		mutex_unlock(&vma->vm_mm->marked_pages_lock);
-	}
+	} 
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
+	if(marked)
+		mutex_unlock(&vma->vm_mm->marked_pages_lock);
 	mutex_unlock(&page->versions_lock);
+	marked = 0;
 #else
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
 #endif
