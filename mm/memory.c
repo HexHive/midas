@@ -886,6 +886,10 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		if (marked){
 			if(mutex_trylock(&page->versions_lock) == 0)
 				return -EAGAIN;
+			if(mutex_trylock(&mm->marked_pages_lock) == 0){
+				mutex_unlock(&page->versions_lock);
+				return -EAGAIN;
+			}
 			count = 0;
 			list_for_each_entry(version, &page->versions, other_nodes) {
 				if(version->pframe == NULL)
@@ -898,10 +902,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 			*marking_ptr = NULL;
 			marking->vaddr = addr;
 			marking->owner_count = count;
-			if(mutex_trylock(&mm->marked_pages_lock) == 0)
-				BUG();
 			list_add(&marking->other_nodes, &mm->marked_pages);
-			mutex_unlock(&mm->marked_pages_lock);
 		}
 #endif
 		get_page(page);
@@ -940,6 +941,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	/* If marked, has page. Also, if it reached here, copy_present_page 
 	 * returned > 0. Therefore, mutex was definitely locked, and rmap_dup called. */
 	if(marked) {
+		mutex_unlock(&mm->marked_pages_lock);
 		mutex_unlock(&page->versions_lock);
 	}
 #endif
