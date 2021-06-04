@@ -8,13 +8,25 @@
 #define MARKER() printk("    %d:%ld:%s:%d\n", current->pid, current->op_code, __func__, __LINE__);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-#define CONFIG_MAX_SHARING 128
 
-void *tocttou_duplicate_page_cache;
-void tocttou_cache_init(void) {
-    tocttou_duplicate_page_cache = kmem_cache_create("tocttou_dup_page", PAGE_SIZE, PAGE_SIZE, SLAB_POISON, NULL);
+#define CONFIG_MAX_PREALLOC 32
+DECLARE_PER_CPU(void *, markings_cache);
+DEFINE_PER_CPU(void *, markings_cache);
+static void *tocttou_duplicate_page_cache;
+
+void __init tiktok_init(void) {
+    int cpu;
+
+    printk("Start tiktok init");
+
+    tocttou_duplicate_page_cache = kmem_cache_create("dup_page_cache", PAGE_SIZE, PAGE_SIZE, SLAB_POISON, NULL);
     BUG_ON(!tocttou_duplicate_page_cache);
+
+    for_each_possible_cpu(cpu) {
+        per_cpu(markings_cache, cpu) = kmem_cache_create("markings_cache", sizeof(struct page_marking), __alignof__(struct page_marking), SLAB_POISON, NULL);
+    }
 }
+arch_initcall(tiktok_init);
 
 void *tocttou_duplicate_page_alloc()
 {
@@ -28,7 +40,7 @@ void tocttou_duplicate_page_free(struct page *pframe)
 {
     BUG_ON(pframe->version_refcount != 0);
     // TODO: Set up duplicate page cache
-	kmem_cache_free(tocttou_duplicate_page_cache, page);
+	kmem_cache_free(tocttou_duplicate_page_cache, pframe);
 }
 
 /* Every instance of syscall requires an identifier */
@@ -130,7 +142,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 {
     pte_t *ppte, entry;
     struct page_marking *marking, **spaces;
-    unsigned i;
+    unsigned i = 0;
     /* Set up the structure to walk the PT in the current mapping */
 	struct page_vma_mapped_walk pvmw = {
 		.page = page,
@@ -164,14 +176,14 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
             /* Find an available buffer, and take it. 
              * Mark acquisition by NULLing that space */
             spaces = arg;
-            for(i = 0; i < CONFIG_MAX_SHARING; i++){
+            for(; i < CONFIG_MAX_PREALLOC; i++){
                 marking = spaces[i];
                 if(marking) {
                     spaces[i] = NULL; 
                     break;
                 }
             }
-            BUG_ON(i == CONFIG_MAX_SHARING);
+            BUG_ON(i == CONFIG_MAX_PREALLOC);
             marking->vaddr = address;
             marking->owner_count = 1;
             list_add(&marking->other_nodes, &mm->marked_pages);
@@ -222,7 +234,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
         marking->owner_count = tmp_owner_count;
         if(tmp_owner_count == 0) {
             list_del(&marking->other_nodes);
-            kfree(marking);
+            kmem_cache_free(get_cpu_var(markings_cache), marking);
             set_pte_at(mm, pvmw.address, ppte, pte_runmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
@@ -245,7 +257,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     pmd_t *pmd;
     pte_t *ptep, pte;
     struct page *pframe, *pframe_copy;
-    void *pframe_vaddr, *new_marking_space[CONFIG_MAX_SHARING];
+    void *pframe_vaddr, *marking_space_prealloc[CONFIG_MAX_PREALLOC], *cpu_markings_cache;
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
     /* Pre-setup for structure which walks reverse mappings for a frame */
@@ -343,15 +355,16 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
              * Space allocated here. If not used, freed after the rmap_walk.
              * If needed during page_mark_one, added to VMA marked_pages list. 
              * Then freed during page_unmark_one. */
-            for(i = 0; i < CONFIG_MAX_SHARING; i++){
-                new_marking_space[i] = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
-                BUG_ON(new_marking_space[i] == NULL);
+            cpu_markings_cache = get_cpu_var(markings_cache);
+            for(i = 0; i < CONFIG_MAX_PREALLOC; i++){
+                marking_space_prealloc[i] = kmem_cache_alloc(cpu_markings_cache, GFP_KERNEL);
+                BUG_ON(marking_space_prealloc[i] == NULL);
             }
-            rwc.arg = &new_marking_space;
+            rwc.arg = &marking_space_prealloc;
             rmap_walk(pframe, &rwc);
-            for(i = 0; i < CONFIG_MAX_SHARING; i++)
-                if(new_marking_space[i]) 
-                    kfree(new_marking_space[i]);
+            for(i = 0; i < CONFIG_MAX_PREALLOC; i++)
+                if(marking_space_prealloc[i]) 
+                    kmem_cache_free(cpu_markings_cache, marking_space_prealloc[i]);
 
         } else{
             if (iter_version->pframe == NULL) /* Marked, unduplicated: Reading from original pframe */
