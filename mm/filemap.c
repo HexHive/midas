@@ -3037,8 +3037,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 			list_for_each_entry(version, &page->versions, other_nodes) {
 				count++;
 			}
-			marking = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
-			BUG_ON(marking == NULL);
+			marking = tocttou_page_marking_alloc();
 			marking->vaddr = vmf->address;
 			marking->owner_count = count;
 			list_add(&marking->other_nodes, &mm->marked_pages);
@@ -3464,7 +3463,7 @@ ssize_t generic_perform_write(struct file *file,
 	ssize_t written = 0;
 	unsigned int flags = 0;
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	struct page *dup_pframe = NULL;
+	struct page_copy *dup_copy = NULL;
 	struct page_version *version;
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
@@ -3531,14 +3530,14 @@ again:
 
 					/* Duplicate for every syscall currently marking this frame
 					* which does not already have a version pframe */
-					if(version->pframe == NULL) {
-						if(!dup_pframe){
-							dup_pframe = tocttou_duplicate_page_alloc(); 
-							BUG_ON(dup_pframe == NULL);
-							memcpy(page_address(dup_pframe), page_address(page), PAGE_SIZE);
+					if(version->copy == NULL) {
+						if(!dup_copy){
+							dup_copy = tocttou_duplicate_page_alloc(); 
+							BUG_ON(dup_copy == NULL);
+							memcpy(&dup_copy->data, page_address(page), PAGE_SIZE);
 						} 
-						dup_pframe->version_refcount++;
-						version->pframe = dup_pframe;
+						dup_copy->refcount++;
+						version->copy = dup_copy;
 						owner_release_count++;
 					}
 				}
@@ -3549,7 +3548,7 @@ again:
 				* Btw, we have checked above (within versions_lock mutex) that the 
 				* PTE has not changed, i.e. the page has not been concurrently 
 				* unmarked. */
-				BUG_ON(dup_pframe == NULL);
+				BUG_ON(dup_copy == NULL);
 				/* Reverse walk to unmark all virtual pages */
 				rmap_walk(page, &rwc);
 			}

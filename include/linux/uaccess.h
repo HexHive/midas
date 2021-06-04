@@ -157,8 +157,10 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 bool page_unmark_one(struct page *, struct vm_area_struct *,
 								     unsigned long, void *);
 void syscall_marking_cleanup(void);
-void* tocttou_duplicate_page_alloc(void);
-void tocttou_duplicate_page_free(struct page *page);
+struct page_copy* tocttou_duplicate_page_alloc(void);
+void tocttou_duplicate_page_free(struct page_copy *page);
+struct page_marking *tocttou_page_marking_alloc(void);
+void tocttou_page_marking_free(struct page_marking *);
 #endif
 
 #ifdef INLINE_COPY_FROM_USER

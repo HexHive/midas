@@ -70,10 +70,13 @@ struct mem_cgroup;
 struct page;
 struct page_version {
 	struct task_struct *task; 	/* Identify the thread for which we keep this version */
-	struct page *pframe;					/* Actual frame holding the version */
+	struct page_copy *copy;					/* Actual frame holding the version */
 	struct list_head other_nodes;	
 };
-
+struct page_copy {
+	char data[PAGE_SIZE];
+	int refcount;
+};
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 
 struct page {
@@ -234,10 +237,7 @@ struct page {
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	struct mutex versions_lock;
-	union {
-		struct list_head versions;
-		int version_refcount;
-	};
+	struct list_head versions;
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 } _struct_page_alignment;
 

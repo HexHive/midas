@@ -9,38 +9,48 @@
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 
-#define CONFIG_MAX_PREALLOC 32
-DECLARE_PER_CPU(void *, markings_cache);
-DEFINE_PER_CPU(void *, markings_cache);
-static void *tocttou_duplicate_page_cache;
+#define CONFIG_MAX_PREALLOC 128
+static void *duplicate_page_cache;
+static void *markings_cache;
 
 void __init tiktok_init(void) {
-    int cpu;
-
     printk("Start tiktok init");
 
-    tocttou_duplicate_page_cache = kmem_cache_create("dup_page_cache", PAGE_SIZE, PAGE_SIZE, SLAB_POISON, NULL);
-    BUG_ON(!tocttou_duplicate_page_cache);
+    duplicate_page_cache = kmem_cache_create("dup_page_cache", sizeof(struct page_copy), PAGE_SIZE, SLAB_POISON, NULL);
+    BUG_ON(!duplicate_page_cache);
 
-    for_each_possible_cpu(cpu) {
-        per_cpu(markings_cache, cpu) = kmem_cache_create("markings_cache", sizeof(struct page_marking), __alignof__(struct page_marking), SLAB_POISON, NULL);
-    }
+    markings_cache = kmem_cache_create("markings_cache", sizeof(struct page_marking), __alignof__(struct page_marking), SLAB_POISON, NULL);
+    BUG_ON(!markings_cache);
 }
 arch_initcall(tiktok_init);
 
-void *tocttou_duplicate_page_alloc()
+struct page_copy *tocttou_duplicate_page_alloc()
 {
-    struct page *pframe = kmem_cache_alloc(tocttou_duplicate_page_cache, GFP_NOWAIT); 
-    BUG_ON(!pframe);
-    pframe->version_refcount = 0;
-    return pframe;
+    struct page_copy *copy = kmem_cache_alloc(duplicate_page_cache, GFP_NOWAIT); 
+    BUG_ON(!copy);
+    copy->refcount = 0;
+    return copy;
 }
 
-void tocttou_duplicate_page_free(struct page *pframe)
+void tocttou_duplicate_page_free(struct page_copy *copy)
 {
-    BUG_ON(pframe->version_refcount != 0);
-    // TODO: Set up duplicate page cache
-	kmem_cache_free(tocttou_duplicate_page_cache, pframe);
+    BUG_ON(!copy);
+    BUG_ON(copy->refcount != 0);
+	kmem_cache_free(duplicate_page_cache, copy);
+}
+
+struct page_marking *tocttou_page_marking_alloc(void) {
+    struct page_marking *marking = kmem_cache_alloc(markings_cache, GFP_KERNEL); 
+    BUG_ON(!marking);
+    marking->vaddr = NULL;
+    marking->owner_count = 0;
+    return marking;
+}
+
+void tocttou_page_marking_free(struct page_marking *marking) {
+    BUG_ON(!marking);
+    BUG_ON(marking->owner_count != 0);
+	kmem_cache_free(markings_cache, marking);
 }
 
 /* Every instance of syscall requires an identifier */
@@ -234,7 +244,7 @@ bool page_unmark_one(struct page *page, struct vm_area_struct *vma,
         marking->owner_count = tmp_owner_count;
         if(tmp_owner_count == 0) {
             list_del(&marking->other_nodes);
-            kmem_cache_free(get_cpu_var(markings_cache), marking);
+            tocttou_page_marking_free(marking);
             set_pte_at(mm, pvmw.address, ppte, pte_runmark(entry));
 			flush_tlb_page(vma, pvmw.address);
         }
@@ -256,8 +266,8 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     pud_t *pud;
     pmd_t *pmd;
     pte_t *ptep, pte;
-    struct page *pframe, *pframe_copy;
-    void *pframe_vaddr, *marking_space_prealloc[CONFIG_MAX_PREALLOC], *cpu_markings_cache;
+    struct page *pframe;
+    void *copy_vaddr, *marking_space_prealloc[CONFIG_MAX_PREALLOC];
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
     /* Pre-setup for structure which walks reverse mappings for a frame */
@@ -338,7 +348,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             new_marked_version = (struct page_version *)kzalloc(sizeof(struct page_version), GFP_KERNEL);
             BUG_ON(new_marked_version == NULL);
             new_marked_version->task = current;
-            new_marked_version->pframe = NULL;
+            new_marked_version->copy = NULL;
             /* New version for the page frame */
             list_add(&new_marked_version->other_nodes, &pframe->versions);
 
@@ -347,7 +357,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             BUG_ON(new_marked_pframe == NULL);
             new_marked_pframe->pframe = pframe;
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
-            pframe_copy = pframe;
+            copy_vaddr = page_address(pframe);
 
             /* Visit all VM spaces that map this page and mark the mapings
              * rwc.arg holds the preallocated struct page_marking because we cannot
@@ -355,30 +365,26 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
              * Space allocated here. If not used, freed after the rmap_walk.
              * If needed during page_mark_one, added to VMA marked_pages list. 
              * Then freed during page_unmark_one. */
-            cpu_markings_cache = get_cpu_var(markings_cache);
-            for(i = 0; i < CONFIG_MAX_PREALLOC; i++){
-                marking_space_prealloc[i] = kmem_cache_alloc(cpu_markings_cache, GFP_KERNEL);
-                BUG_ON(marking_space_prealloc[i] == NULL);
-            }
+            for(i = 0; i < CONFIG_MAX_PREALLOC; i++)
+                marking_space_prealloc[i] = tocttou_page_marking_alloc();
             rwc.arg = &marking_space_prealloc;
             rmap_walk(pframe, &rwc);
             for(i = 0; i < CONFIG_MAX_PREALLOC; i++)
                 if(marking_space_prealloc[i]) 
-                    kmem_cache_free(cpu_markings_cache, marking_space_prealloc[i]);
+                    tocttou_page_marking_free(marking_space_prealloc[i]);
 
         } else{
-            if (iter_version->pframe == NULL) /* Marked, unduplicated: Reading from original pframe */
-                pframe_copy = pframe;
+            if (iter_version->copy == NULL) /* Marked, unduplicated: Reading from original pframe */
+                copy_vaddr = page_address(pframe);
             else                              /* Marked, duplicated: Read from iter_version's pframe */
-                pframe_copy = iter_version->pframe;
+                copy_vaddr = &iter_version->copy->data;
 
         }
         mutex_unlock(&pframe->versions_lock);
         mutex_unlock(&current->markings_lock);
 
-        pframe_vaddr = page_address(pframe_copy);
-        BUG_ON(pframe_vaddr == NULL);
-        src = (uintptr_t)pframe_vaddr + (src & ~PAGE_MASK);
+        BUG_ON(copy_vaddr == NULL);
+        src = (uintptr_t)copy_vaddr + (src & ~PAGE_MASK);
 
         ret = __raw_copy_from_user((void *)dst, (const void *)src, size);
         return ret;
@@ -480,9 +486,9 @@ retry_syscall_cleanup:
 		/* Release frame for marked, duplicated frames. Duplication happened in 
          * the page-fault handler, which also unmarked them. 
          * For unduplicated ones, unmark */
-		if(version->pframe) {
-            if(version->pframe->version_refcount-- == 1)
-    			tocttou_duplicate_page_free(version->pframe);
+		if(version->copy) {
+            if(version->copy->refcount-- == 1)
+    			tocttou_duplicate_page_free(version->copy);
         } else {
             /* Reverse walk to unmark all virtual pages */
             rmap_walk(marked_frame->pframe, &rwc);

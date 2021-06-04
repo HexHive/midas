@@ -892,7 +892,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 			}
 			count = 0;
 			list_for_each_entry(version, &page->versions, other_nodes) {
-				if(version->pframe == NULL)
+				if(version->copy == NULL)
 					count++;
 			}
 			BUG_ON(count == 0);
@@ -986,10 +986,8 @@ copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	struct page_marking *prealloc_page_marking[page_count];
 	int marking_count;
 	/* Prealloc markings for all pages that might get marked */
-	for(marking_count = 0; marking_count < page_count; marking_count++) {
-		prealloc_page_marking[marking_count] = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
-		BUG_ON(prealloc_page_marking[marking_count] == NULL);
-	}
+	for(marking_count = 0; marking_count < page_count; marking_count++) 
+		prealloc_page_marking[marking_count] = tocttou_page_marking_alloc();
 	marking_count = 0;
 #endif
 
@@ -1094,11 +1092,8 @@ out:
 	if (unlikely(prealloc))
 		put_page(prealloc);
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	// printk("Consumed %d out of %d prealloc markings\n", marking_count, page_count);
-  for(; marking_count < page_count; marking_count++) {
-		BUG_ON(prealloc_page_marking[marking_count] == NULL);
-		kfree(prealloc_page_marking[marking_count]);
-	}
+  for(; marking_count < page_count; marking_count++) 
+		tocttou_page_marking_free(prealloc_page_marking[marking_count]);
 #endif
 
 	return ret;
@@ -2917,7 +2912,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	struct page *old_pframe, *new_pframe;
 	struct page_version *version, *next;
 	struct task_struct *task;
-	struct page *dup_pframe = NULL;
+	struct page_copy *dup = NULL;
 	int owner_release_count = 0, owner_retained_count = 0;
 	struct marked_frame *marking;
 	int is_cow_tocttou = 0, updated_marking = 0;
@@ -3089,7 +3084,7 @@ retry_wp_page_copy:
 		 */
 		list_for_each_entry_safe(version, next, &old_pframe->versions, other_nodes) {
 			/* A version of a COW frame cannot already be duplicated */
-			BUG_ON(version->pframe != NULL);
+			BUG_ON(version->copy);
 
 			task = version->task;
 			/* For each task in the same process (which share the same mm struct)
@@ -3131,14 +3126,14 @@ retry_wp_page_copy:
 
 		/* Create duplicates for readers of new frame */
 		list_for_each_entry(version, &new_pframe->versions, other_nodes) {
-			if(version->pframe == NULL) {
-				if(!dup_pframe){
-					dup_pframe = tocttou_duplicate_page_alloc(); 
-					BUG_ON(dup_pframe == NULL);
-					memcpy(page_address(dup_pframe), page_address(new_pframe), PAGE_SIZE);
+			if(version->copy == NULL) {
+				if(!dup){
+					dup = tocttou_duplicate_page_alloc(); 
+					BUG_ON(dup == NULL);
+					memcpy(&dup->data, page_address(new_pframe), PAGE_SIZE);
 				} 
-				dup_pframe->version_refcount++;
-				version->pframe = dup_pframe;
+				dup->refcount++;
+				version->copy = dup;
 			}
 		}
 		/* VMAs mapping this frame will have owner counts reflecting also those
@@ -4602,15 +4597,16 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	struct page *pframe, *dup_pframe = NULL;
+	struct page *pframe;
+	struct page_copy *dup = NULL;
 	struct page_version *version;
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = { 
-			.arg = &owner_release_count,
-			.rmap_one = page_unmark_one,
-			.anon_lock = page_lock_anon_vma_read,
-		};
+		.arg = &owner_release_count,
+		.rmap_one = page_unmark_one,
+		.anon_lock = page_lock_anon_vma_read,
+	};
 #endif
 
 	if (unlikely(pmd_none(*vmf->pmd))) {
@@ -4702,14 +4698,14 @@ retry_duplication:
 		list_for_each_entry(version, &pframe->versions, other_nodes) {
 			/* Duplicate for every syscall currently marking this frame
 			* which does not already have a version pframe */
-			if(version->pframe == NULL) {
-				if(!dup_pframe){
-					dup_pframe = tocttou_duplicate_page_alloc(); 
-					BUG_ON(dup_pframe == NULL);
-					memcpy(page_address(dup_pframe), page_address(pframe), PAGE_SIZE);
+			if(version->copy == NULL) {
+				if(!dup){
+					dup = tocttou_duplicate_page_alloc(); 
+					BUG_ON(dup == NULL);
+					memcpy(&dup->data, page_address(pframe), PAGE_SIZE);
 				} 
-				dup_pframe->version_refcount++;
-				version->pframe = dup_pframe;
+				dup->refcount++;
+				version->copy = dup;
 				owner_release_count++;
 			}
 		}
@@ -4720,7 +4716,7 @@ retry_duplication:
 		 * Btw, we have checked above (within versions_lock mutex) that the 
 		 * PTE has not changed, i.e. the page has not been concurrently 
 		 * unmarked. */
-		BUG_ON(dup_pframe == NULL);
+		BUG_ON(dup == NULL);
 
 		/* Reverse walk to unmark all virtual pages */
 		rmap_walk(pframe, &rwc);
