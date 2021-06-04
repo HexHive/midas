@@ -12,6 +12,8 @@
 #define CONFIG_MAX_PREALLOC 128
 static void *duplicate_page_cache;
 static void *markings_cache;
+static void *versions_cache;
+static void *marked_frames_cache;
 
 void __init tiktok_init(void) {
     printk("Start tiktok init");
@@ -21,6 +23,12 @@ void __init tiktok_init(void) {
 
     markings_cache = kmem_cache_create("markings_cache", sizeof(struct page_marking), __alignof__(struct page_marking), SLAB_POISON, NULL);
     BUG_ON(!markings_cache);
+
+    versions_cache = kmem_cache_create("versions_cache", sizeof(struct page_version), __alignof__(struct page_version), SLAB_POISON, NULL);
+    BUG_ON(!versions_cache);
+
+    marked_frames_cache = kmem_cache_create("marked frames cache", sizeof(struct marked_frame), __alignof__(struct marked_frame), SLAB_POISON, NULL);
+    BUG_ON(!marked_frames_cache);
 }
 arch_initcall(tiktok_init);
 
@@ -42,7 +50,7 @@ void tocttou_duplicate_page_free(struct page_copy *copy)
 struct page_marking *tocttou_page_marking_alloc(void) {
     struct page_marking *marking = kmem_cache_alloc(markings_cache, GFP_KERNEL); 
     BUG_ON(!marking);
-    marking->vaddr = NULL;
+    marking->vaddr = 0;
     marking->owner_count = 0;
     return marking;
 }
@@ -345,7 +353,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         }
         if(&iter_version->other_nodes == &pframe->versions) {  /* Unmarked, unduplicated: Add to pframe */
             
-            new_marked_version = (struct page_version *)kzalloc(sizeof(struct page_version), GFP_KERNEL);
+            new_marked_version = (struct page_version *)kmem_cache_alloc(versions_cache, GFP_KERNEL);
             BUG_ON(new_marked_version == NULL);
             new_marked_version->task = current;
             new_marked_version->copy = NULL;
@@ -353,7 +361,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             list_add(&new_marked_version->other_nodes, &pframe->versions);
 
             /* New marked frame for this syscall */
-            new_marked_pframe = (struct marked_frame *)kzalloc(sizeof(struct marked_frame), GFP_KERNEL);
+            new_marked_pframe = (struct marked_frame *)kmem_cache_alloc(marked_frames_cache, GFP_KERNEL);
             BUG_ON(new_marked_pframe == NULL);
             new_marked_pframe->pframe = pframe;
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
@@ -494,11 +502,11 @@ retry_syscall_cleanup:
             rmap_walk(marked_frame->pframe, &rwc);
         }
 		list_del(&version->other_nodes);
-		kfree(version);
+		kmem_cache_free(versions_cache, version);
 
 		list_del(&marked_frame->other_nodes);
         mutex_unlock(&marked_frame->pframe->versions_lock);
-		kfree(marked_frame);
+		kmem_cache_free(marked_frames_cache, marked_frame);
 	}
     mutex_unlock(&current->markings_lock);
 
