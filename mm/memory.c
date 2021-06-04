@@ -3650,7 +3650,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		list_for_each_entry(version, &page->versions, other_nodes) {
 			count++;
 		}
-		marking = kzalloc(sizeof(struct page_marking), GFP_KERNEL);
+		marking = tocttou_page_marking_alloc();
 		marking->vaddr = vmf->address;
 		marking->owner_count = count;
 		list_add(&marking->other_nodes, &vma->vm_mm->marked_pages);
