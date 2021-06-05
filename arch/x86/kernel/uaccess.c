@@ -14,9 +14,13 @@ static void *duplicate_page_cache;
 static void *markings_cache;
 static void *versions_cache;
 static void *marked_frames_cache;
+DEFINE_PER_CPU(struct page_marking *, prealloc_markings[CONFIG_MAX_PREALLOC]);
+DEFINE_PER_CPU(struct page_marking *, prealloc_markings[CONFIG_MAX_PREALLOC]);
+DEFINE_PER_CPU(int, prealloc_markings_count);
+DEFINE_PER_CPU(int, prealloc_markings_count);
 
 void __init tiktok_init(void) {
-    printk("Start tiktok init");
+    int cpu, i;
 
     duplicate_page_cache = kmem_cache_create("dup_page_cache", sizeof(struct page_copy), PAGE_SIZE, SLAB_POISON, NULL);
     BUG_ON(!duplicate_page_cache);
@@ -29,6 +33,13 @@ void __init tiktok_init(void) {
 
     marked_frames_cache = kmem_cache_create("marked frames cache", sizeof(struct marked_frame), __alignof__(struct marked_frame), SLAB_POISON, NULL);
     BUG_ON(!marked_frames_cache);
+
+    for_each_possible_cpu(cpu) {
+        for(i = 0; i < CONFIG_MAX_PREALLOC; i++) {
+            per_cpu(prealloc_markings, cpu)[i] = tocttou_page_marking_alloc();
+        }
+        per_cpu(prealloc_markings_count, cpu) = CONFIG_MAX_PREALLOC;
+    }
 }
 arch_initcall(tiktok_init);
 
@@ -193,15 +204,13 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 
             /* Find an available buffer, and take it. 
              * Mark acquisition by NULLing that space */
-            spaces = arg;
-            for(; i < CONFIG_MAX_PREALLOC; i++){
-                marking = spaces[i];
-                if(marking) {
-                    spaces[i] = NULL; 
-                    break;
-                }
-            }
-            BUG_ON(i == CONFIG_MAX_PREALLOC);
+            do {
+                i = get_cpu_var(prealloc_markings_count);
+                BUG_ON(i == 0);
+                marking = get_cpu_var(prealloc_markings)[i - 1];
+                get_cpu_var(prealloc_markings_count) = i - 1;
+            } while (marking == NULL);
+            get_cpu_var(prealloc_markings)[i - 1] = NULL;
             marking->vaddr = address;
             marking->owner_count = 1;
             list_add(&marking->other_nodes, &mm->marked_pages);
@@ -268,14 +277,14 @@ void tocttou_file_mark_start(struct file *file) {
 
 static
 unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned long src, unsigned long size) {
-    unsigned tries, i;
+    unsigned tries;
     pgd_t *pgd;
     p4d_t *p4d;
     pud_t *pud;
     pmd_t *pmd;
     pte_t *ptep, pte;
     struct page *pframe;
-    void *copy_vaddr, *marking_space_prealloc[CONFIG_MAX_PREALLOC];
+    void *copy_vaddr;
     struct page_version *iter_version, *new_marked_version;
     struct marked_frame *new_marked_pframe;
     /* Pre-setup for structure which walks reverse mappings for a frame */
@@ -285,6 +294,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 		.anon_lock = page_lock_anon_vma_read,
 	};
     unsigned long ret;
+    int i;
 
     /* Reading within a single page */
     BUG_ON(((src + size - 1) & PAGE_SIZE) != (src & PAGE_SIZE));
@@ -373,13 +383,12 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
              * Space allocated here. If not used, freed after the rmap_walk.
              * If needed during page_mark_one, added to VMA marked_pages list. 
              * Then freed during page_unmark_one. */
-            for(i = 0; i < CONFIG_MAX_PREALLOC; i++)
-                marking_space_prealloc[i] = tocttou_page_marking_alloc();
-            rwc.arg = &marking_space_prealloc;
+            for(i = 0; i < CONFIG_MAX_PREALLOC; i++) {
+                if(!get_cpu_var(prealloc_markings)[i])
+                    get_cpu_var(prealloc_markings)[i] = tocttou_page_marking_alloc();
+            }
+            get_cpu_var(prealloc_markings_count) = CONFIG_MAX_PREALLOC;
             rmap_walk(pframe, &rwc);
-            for(i = 0; i < CONFIG_MAX_PREALLOC; i++)
-                if(marking_space_prealloc[i]) 
-                    tocttou_page_marking_free(marking_space_prealloc[i]);
 
         } else{
             if (iter_version->copy == NULL) /* Marked, unduplicated: Reading from original pframe */
