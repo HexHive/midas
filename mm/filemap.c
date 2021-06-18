@@ -2457,7 +2457,7 @@ ssize_t generic_file_buffered_read(struct kiocb *iocb,
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	int j;
 	struct page *page;
-	struct page_version *version;
+	struct page_snap *snap;
 #endif
 
 	if (unlikely(iocb->ki_pos >= inode->i_sb->s_maxbytes))
@@ -2498,20 +2498,20 @@ ssize_t generic_file_buffered_read(struct kiocb *iocb,
 		for(j = 0; j < pg_nr; j++){
 			page = pages[j];
 			/* Not user page, so high chance that it has not been initialized */
-			if(page->versions.next == NULL && page->versions.prev == NULL) {
-				mutex_init(&page->versions_lock);
-				INIT_LIST_HEAD(&page->versions);
+			if(page->snaps.next == NULL && page->snaps.prev == NULL) {
+				mutex_init(&page->snaps_lock);
+				INIT_LIST_HEAD(&page->snaps);
 			}
 			/* Testing an assumption. There should not be vfs_read call in
 			 * same syscall which marks this page via raw_copy_from_user.
-			 * Can be removed in evaluation version. */
-			mutex_lock(&page->versions_lock);
-			if(!list_empty(&page->versions)){
-				list_for_each_entry(version, &page->versions, other_nodes) {
-					BUG_ON(version->task == current);
+			 * Can be removed in evaluation snap. */
+			mutex_lock(&page->snaps_lock);
+			if(!list_empty(&page->snaps)){
+				list_for_each_entry(snap, &page->snaps, other_nodes) {
+					BUG_ON(snap->task == current);
 				}
 			}
-			mutex_unlock(&page->versions_lock);
+			mutex_unlock(&page->snaps_lock);
 		}
 #endif
 		/*
@@ -2952,7 +2952,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 	unsigned int mmap_miss = READ_ONCE(file->f_ra.mmap_miss);
 #ifdef CONFIG_TOCTTOU_PROTECTION
   struct page_marking *marking;
-	struct page_version *version;
+	struct page_snap *snap;
 	int count = 0, pteret, page_init_here = 0, marking_locked = 0;
 	pte_t *tmp_pte;
 	struct mm_struct *mm;
@@ -3003,16 +3003,16 @@ void filemap_map_pages(struct vm_fault *vmf,
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	BUG_ON(page == NULL);
 	/* Hacky solution attempt for crashes within the following 
-	 * mutex lock for page->versions_lock */
+	 * mutex lock for page->snaps_lock */
 	//TODO: Atri Have better page initialization
-	if(page->versions.next == NULL && page->versions.prev == NULL) {
-		mutex_init(&page->versions_lock);
-		INIT_LIST_HEAD(&page->versions);
+	if(page->snaps.next == NULL && page->snaps.prev == NULL) {
+		mutex_init(&page->snaps_lock);
+		INIT_LIST_HEAD(&page->snaps);
 		page_init_here = 1;
 	}
-	mutex_lock(&page->versions_lock);
+	mutex_lock(&page->snaps_lock);
 	
-	if(!list_empty(&page->versions)){
+	if(!list_empty(&page->snaps)){
 		BUG_ON(page_init_here);
 		mm = vmf->vma->vm_mm;
 		mutex_lock(&mm->marked_pages_lock);
@@ -3034,7 +3034,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 			vmf->flags |= FAULT_FLAG_TOCTTOU_FILE;
 
 			count = 0;
-			list_for_each_entry(version, &page->versions, other_nodes) {
+			list_for_each_entry(snap, &page->snaps, other_nodes) {
 				count++;
 			}
 			marking = tocttou_page_marking_alloc();
@@ -3047,7 +3047,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 	pteret = alloc_set_pte(vmf, page);
 	if(marking_locked)
 		mutex_unlock(&mm->marked_pages_lock);
-	mutex_unlock(&page->versions_lock);
+	mutex_unlock(&page->snaps_lock);
 	vmf->flags &= ~FAULT_FLAG_TOCTTOU_FILE;
 	marking_locked = 0;
 	if(pteret)
@@ -3464,7 +3464,7 @@ ssize_t generic_perform_write(struct file *file,
 	unsigned int flags = 0;
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	struct page_copy *dup_copy = NULL;
-	struct page_version *version;
+	struct page_snap *snap;
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = { 
@@ -3514,45 +3514,45 @@ again:
 #ifdef CONFIG_TOCTTOU_PROTECTION
 		if(page) {
 			/* Not user page, so high chance that it has not been initialized */
-			if(page->versions.next == NULL && page->versions.prev == NULL) {
-				mutex_init(&page->versions_lock);
-				INIT_LIST_HEAD(&page->versions);
+			if(page->snaps.next == NULL && page->snaps.prev == NULL) {
+				mutex_init(&page->snaps_lock);
+				INIT_LIST_HEAD(&page->snaps);
 			}
-			mutex_lock(&page->versions_lock);
-			if(!list_empty(&page->versions)) {
+			mutex_lock(&page->snaps_lock);
+			if(!list_empty(&page->snaps)) {
 				
-				list_for_each_entry(version, &page->versions, other_nodes) {
+				list_for_each_entry(snap, &page->snaps, other_nodes) {
 					/* Testing an assumption. There should not be vfs_write call in
 					* same syscall which marks this page via raw_copy_from_user.
-					* Can be removed in evaluation version. */
+					* Can be removed in evaluation snap. */
 					//TODO: remove test
-					BUG_ON(version->task == current);
+					BUG_ON(snap->task == current);
 
 					/* Duplicate for every syscall currently marking this frame
-					* which does not already have a version pframe */
-					if(version->copy == NULL) {
+					* which does not already have a snap pframe */
+					if(snap->copy == NULL) {
 						if(!dup_copy){
 							dup_copy = tocttou_duplicate_page_alloc(); 
 							BUG_ON(dup_copy == NULL);
 							memcpy(&dup_copy->data, page_address(page), PAGE_SIZE);
 						} 
 						dup_copy->refcount++;
-						version->copy = dup_copy;
+						snap->copy = dup_copy;
 						owner_release_count++;
 					}
 				}
 				/* Having a NULL dup_pframe here means that none of the entries in the 
-				* pframe's versions list lacked a duplicate. This should not happen,
-				* since the page is marked only when a version is also added to the list
+				* pframe's snaps list lacked a duplicate. This should not happen,
+				* since the page is marked only when a snap is also added to the list
 				* without a duplicate. 
-				* Btw, we have checked above (within versions_lock mutex) that the 
+				* Btw, we have checked above (within snaps_lock mutex) that the 
 				* PTE has not changed, i.e. the page has not been concurrently 
 				* unmarked. */
 				BUG_ON(dup_copy == NULL);
 				/* Reverse walk to unmark all virtual pages */
 				rmap_walk(page, &rwc);
 			}
-			mutex_unlock(&page->versions_lock);
+			mutex_unlock(&page->snaps_lock);
 		}
 #endif
 		if (mapping_writably_mapped(mapping))

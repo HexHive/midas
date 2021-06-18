@@ -154,33 +154,34 @@ static inline void __mm_zero_struct_page(struct page *page)
 	unsigned long *_pp = (void *)page;
 
 	// char (*__kaboom)[sizeof( struct page )] = 1;
-	 /* Check that struct page is either 56, 64, 72, or 80 bytes */
+	/* Check that struct page is either 56, 64, 72, or 80 bytes */
+	/* Tiktok: Target is to return to 64B */
 	BUILD_BUG_ON(sizeof(struct page) & 7);
 	BUILD_BUG_ON(sizeof(struct page) < 56);
-	BUILD_BUG_ON(sizeof(struct page) > 224);
+	BUILD_BUG_ON(sizeof(struct page) > 112);
 
 	switch (sizeof(struct page)) {
-	case 224:
-		_pp[10] = 0;
-		fallthrough;
-	case 208:
-		_pp[10] = 0;
-		fallthrough;
-	case 192:
-		_pp[10] = 0;
-		fallthrough;
-	case 176:
-		_pp[10] = 0;
-		fallthrough;
-	case 160:
-		_pp[10] = 0;
-		fallthrough;
-	case 144:
-		_pp[10] = 0;
-		fallthrough;
-	case 128:
-		_pp[10] = 0;
-		fallthrough;
+	// case 224:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
+	// case 208:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
+	// case 192:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
+	// case 176:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
+	// case 160:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
+	// case 144:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
+	// case 128:
+	// 	_pp[10] = 0;
+	// 	fallthrough;
 	case 112:
 		_pp[10] = 0;
 		fallthrough;

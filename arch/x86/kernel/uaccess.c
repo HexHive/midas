@@ -12,7 +12,7 @@
 #define CONFIG_MAX_PREALLOC 128
 static void *duplicate_page_cache;
 static void *markings_cache;
-static void *versions_cache;
+static void *snaps_cache;
 static void *marked_frames_cache;
 DEFINE_PER_CPU(struct page_marking *, prealloc_markings[CONFIG_MAX_PREALLOC]);
 DEFINE_PER_CPU(struct page_marking *, prealloc_markings[CONFIG_MAX_PREALLOC]);
@@ -37,8 +37,8 @@ void __init tiktok_init(void) {
     markings_cache = kmem_cache_create("markings_cache", sizeof(struct page_marking), __alignof__(struct page_marking), SLAB_POISON, NULL);
     BUG_ON(!markings_cache);
 
-    versions_cache = kmem_cache_create("versions_cache", sizeof(struct page_version), __alignof__(struct page_version), SLAB_POISON, NULL);
-    BUG_ON(!versions_cache);
+    snaps_cache = kmem_cache_create("snaps_cache", sizeof(struct page_snap), __alignof__(struct page_snap), SLAB_POISON, NULL);
+    BUG_ON(!snaps_cache);
 
     marked_frames_cache = kmem_cache_create("marked frames cache", sizeof(struct marked_frame), __alignof__(struct marked_frame), SLAB_POISON, NULL);
     BUG_ON(!marked_frames_cache);
@@ -111,7 +111,7 @@ int should_mark(void) {
 	switch (current->op_code) {
 
 		// These calls needed to be ignored for the normal operation of the
-		// submitted version of TikTok
+		// submitted snap of TikTok
 		// Finit_module and exit were left after the debugging run, but the system
 		// runs perfectly fine with the protected
 		case __NR_futex:
@@ -178,7 +178,7 @@ static bool page_mark_one(struct page *page, struct vm_area_struct *vma,
 		     unsigned long address, void *arg)
 {
     pte_t *ppte, entry;
-    struct page_marking *marking, **spaces;
+    struct page_marking *marking;
     unsigned i = 0;
     /* Set up the structure to walk the PT in the current mapping */
 	struct page_vma_mapped_walk pvmw = {
@@ -293,7 +293,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
     pte_t *ptep, pte;
     struct page *pframe;
     void *copy_vaddr;
-    struct page_version *iter_version, *new_marked_version;
+    struct page_snap *iter_snap, *new_marked_snap;
     struct marked_frame *new_marked_pframe;
     /* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = {
@@ -356,27 +356,27 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         mark_page_accessed(pframe);
         mark_page_accessed(pframe);
 
-        mutex_lock(&pframe->versions_lock);
+        mutex_lock(&pframe->snaps_lock);
         if(!pte_same(pte, *ptep)) {
-            mutex_unlock(&pframe->versions_lock);
+            mutex_unlock(&pframe->snaps_lock);
             continue;
         }
         mutex_lock(&current->markings_lock);
         /* Check the list of duplicates for the frame to see if there is one corresponding to 
          * this syscall */
-        list_for_each_entry(iter_version, &pframe->versions, other_nodes) {
-            if(iter_version->task == current) {
+        list_for_each_entry(iter_snap, &pframe->snaps, other_nodes) {
+            if(iter_snap->task == current) {
                 break;
             }
         }
-        if(&iter_version->other_nodes == &pframe->versions) {  /* Unmarked, unduplicated: Add to pframe */
+        if(&iter_snap->other_nodes == &pframe->snaps) {  /* Unmarked, unduplicated: Add to pframe */
             
-            new_marked_version = (struct page_version *)kmem_cache_alloc(versions_cache, GFP_KERNEL);
-            BUG_ON(new_marked_version == NULL);
-            new_marked_version->task = current;
-            new_marked_version->copy = NULL;
-            /* New version for the page frame */
-            list_add(&new_marked_version->other_nodes, &pframe->versions);
+            new_marked_snap = (struct page_snap *)kmem_cache_alloc(snaps_cache, GFP_KERNEL);
+            BUG_ON(new_marked_snap == NULL);
+            new_marked_snap->task = current;
+            new_marked_snap->copy = NULL;
+            /* New snap for the page frame */
+            list_add(&new_marked_snap->other_nodes, &pframe->snaps);
 
             /* New marked frame for this syscall */
             new_marked_pframe = (struct marked_frame *)kmem_cache_alloc(marked_frames_cache, GFP_KERNEL);
@@ -399,13 +399,13 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             rmap_walk(pframe, &rwc);
 
         } else{
-            if (iter_version->copy == NULL) /* Marked, unduplicated: Reading from original pframe */
+            if (iter_snap->copy == NULL) /* Marked, unduplicated: Reading from original pframe */
                 copy_vaddr = page_address(pframe);
-            else                              /* Marked, duplicated: Read from iter_version's pframe */
-                copy_vaddr = &iter_version->copy->data;
+            else                              /* Marked, duplicated: Read from iter_snap's pframe */
+                copy_vaddr = &iter_snap->copy->data;
 
         }
-        mutex_unlock(&pframe->versions_lock);
+        mutex_unlock(&pframe->snaps_lock);
         mutex_unlock(&current->markings_lock);
 
         BUG_ON(copy_vaddr == NULL);
@@ -475,7 +475,7 @@ EXPORT_SYMBOL(raw_copy_from_user);
 
 void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
-	struct page_version *version;
+	struct page_snap *snap;
     int owners_released = 1, irq_dis;
     struct rmap_walk_control rwc = {
         .arg = &owners_released,
@@ -483,7 +483,7 @@ void syscall_marking_cleanup() {
         .anon_lock = page_lock_anon_vma_read,
     };
 #ifdef CONFIG_TOCTTOU_ACCOUNTING
-    unsigned long local_snapshot_counter = 0, local_copy_counter = 0;
+    unsigned long local_snap_counter = 0, local_copy_counter = 0;
     unsigned long tmp;
 #endif
 
@@ -499,28 +499,28 @@ retry_syscall_cleanup:
 	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
         /* Preventing mutex deadlock with COW tocttou page duplication code by backing
          * off */
-        if(mutex_trylock(&marked_frame->pframe->versions_lock) == 0) {
+        if(mutex_trylock(&marked_frame->pframe->snaps_lock) == 0) {
             mutex_unlock(&current->markings_lock);
             goto retry_syscall_cleanup;
         }
 
 #ifdef CONFIG_TOCTTOU_ACCOUNTING
-        local_snapshot_counter++;
+        local_snap_counter++;
 #endif
-		/* Find and delete version */
-		list_for_each_entry(version, &marked_frame->pframe->versions, other_nodes) {
-			if(version->task == current)
+		/* Find and delete snap */
+		list_for_each_entry(snap, &marked_frame->pframe->snaps, other_nodes) {
+			if(snap->task == current)
 				break;
 		}
-		BUG_ON(version == NULL);
+		BUG_ON(snap == NULL);
 
 
 		/* Release frame for marked, duplicated frames. Duplication happened in 
          * the page-fault handler, which also unmarked them. 
          * For unduplicated ones, unmark */
-		if(version->copy) {
-            if(version->copy->refcount-- == 1) {
-    			tocttou_duplicate_page_free(version->copy);
+		if(snap->copy) {
+            if(snap->copy->refcount-- == 1) {
+    			tocttou_duplicate_page_free(snap->copy);
 #ifdef CONFIG_TOCTTOU_ACCOUNTING
                 local_copy_counter++;
 #endif
@@ -529,11 +529,11 @@ retry_syscall_cleanup:
             /* Reverse walk to unmark all virtual pages */
             rmap_walk(marked_frame->pframe, &rwc);
         }
-		list_del(&version->other_nodes);
-		kmem_cache_free(versions_cache, version);
+		list_del(&snap->other_nodes);
+		kmem_cache_free(snaps_cache, snap);
 
 		list_del(&marked_frame->other_nodes);
-        mutex_unlock(&marked_frame->pframe->versions_lock);
+        mutex_unlock(&marked_frame->pframe->snaps_lock);
 		kmem_cache_free(marked_frames_cache, marked_frame);
 	}
     mutex_unlock(&current->markings_lock);
@@ -542,7 +542,7 @@ retry_syscall_cleanup:
         local_irq_disable();
 
 #ifdef CONFIG_TOCTTOU_ACCOUNTING
-    __atomic_add_fetch (&snapshot_counter, local_snapshot_counter, __ATOMIC_RELAXED);
+    __atomic_add_fetch (&snapshot_counter, local_snap_counter, __ATOMIC_RELAXED);
     __atomic_add_fetch (&copy_counter, local_copy_counter, __ATOMIC_RELAXED);
     tmp = __atomic_add_fetch (&syscall_counter, 1, __ATOMIC_SEQ_CST);
 

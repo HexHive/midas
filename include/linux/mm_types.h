@@ -68,9 +68,9 @@ struct mem_cgroup;
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 struct page;
-struct page_version {
-	struct task_struct *task; 	/* Identify the thread for which we keep this version */
-	struct page_copy *copy;					/* Actual frame holding the version */
+struct page_snap {
+	struct task_struct *task; 	/* Identify the thread for which we keep this snapshot */
+	struct page_copy *copy;					/* Copy backing this snapshot */
 	struct list_head other_nodes;	
 };
 struct page_copy {
@@ -236,8 +236,8 @@ struct page {
 #endif
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	struct mutex versions_lock;
-	struct list_head versions;
+	struct mutex snaps_lock;
+	struct list_head snaps;
 #endif /* CONFIG_TOCTTOU_PROTECTION */
 } _struct_page_alignment;
 

@@ -897,7 +897,6 @@ compaction_capture(struct capture_control *capc, struct page *page,
 static inline void add_to_free_list(struct page *page, struct zone *zone,
 				    unsigned int order, int migratetype)
 {
-	// BUG_ON(!list_empty(&page->versions));
 	struct free_area *area = &zone->free_area[order];
 
 	list_add(&page->lru, &area->free_list[migratetype]);
@@ -908,7 +907,6 @@ static inline void add_to_free_list(struct page *page, struct zone *zone,
 static inline void add_to_free_list_tail(struct page *page, struct zone *zone,
 					 unsigned int order, int migratetype)
 {
-	// BUG_ON(!list_empty(&page->versions));
 	struct free_area *area = &zone->free_area[order];
 
 	list_add_tail(&page->lru, &area->free_list[migratetype]);
@@ -923,7 +921,6 @@ static inline void add_to_free_list_tail(struct page *page, struct zone *zone,
 static inline void move_to_free_list(struct page *page, struct zone *zone,
 				     unsigned int order, int migratetype)
 {
-	// BUG_ON(!list_empty(&page->versions));
 	struct free_area *area = &zone->free_area[order];
 
 	list_move_tail(&page->lru, &area->free_list[migratetype]);
@@ -2323,8 +2320,8 @@ static void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags
 		clear_page_pfmemalloc(page);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_init(&page->versions_lock);
-	INIT_LIST_HEAD(&page->versions);
+	mutex_init(&page->snaps_lock);
+	INIT_LIST_HEAD(&page->snaps);
 #endif
 
 }

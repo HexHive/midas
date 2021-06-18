@@ -153,7 +153,7 @@ extern int __get_user_bad(void);
  * On error, the variable @x is set to zero.
  */
 #ifdef CONFIG_TOCTTOU_PROTECTION
-/* TOCTTOU-safe version uses generic copy_{to,from}_user */
+/* TOCTTOU-safe version uses generic copy_from_user */
 #define get_user(x, ptr) (copy_from_user((void *) &x, ptr, sizeof(x)) == 0 ? 0 : -EFAULT)
 #else /* CONFIG_TOCTTOU_PROTECTION */
 #define get_user(x,ptr) ({ might_fault(); do_get_user_call(get_user,x,ptr); })
@@ -257,22 +257,7 @@ extern void __put_user_nocheck_8(void);
  *
  * Return: zero on success, or -EFAULT on error.
  */
-#ifdef CONFIG_TOCTTOU_PROTECTION
-/* TikTok hack news: There are a couple of issues with put_user. 
- * First, it is often used directly with values. Usages might include put_user(0, addr)
- * Secondly, x can be bitfields, messing up sizeof(x).
- * The below implementation adds a temporary variable with local scope, ensuring an address, 
- * and a size.
- */
-static unsigned long copy_to_user(void __user *dst, const void *src, unsigned long size);
-/* TOCTTOU-safe version uses generic copy_{to,from}_user */
-#define put_user(x, ptr) ({        \
-	typeof(x) __put_user_tmp = x;  \
-	copy_to_user(ptr, &__put_user_tmp, sizeof(__put_user_tmp)) == 0 ? 0 : -EFAULT; \
-})
-#else /* CONFIG_TOCTTOU_PROTECTION */
 #define put_user(x, ptr) ({ might_fault(); do_put_user_call(put_user,x,ptr); })
-#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 /**
  * __put_user - Write a simple value into user space, with less checking.
@@ -294,12 +279,7 @@ static unsigned long copy_to_user(void __user *dst, const void *src, unsigned lo
  *
  * Return: zero on success, or -EFAULT on error.
  */
-#ifdef CONFIG_TOCTTOU_PROTECTION
-/* TOCTTOU-safe version uses generic copy_{to,from}_user */
-#define __put_user(x, ptr) put_user(x, ptr)
-#else /* CONFIG_TOCTTOU_PROTECTION */
 #define __put_user(x, ptr) do_put_user_call(put_user_nocheck,x,ptr)
-#endif /* CONFIG_TOCTTOU_PROTECTION */
 
 #define __put_user_size(x, ptr, size, label)				\
 do {									\

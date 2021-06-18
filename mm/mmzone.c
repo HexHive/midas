@@ -15,8 +15,6 @@ struct page *get_page_from_free_area(struct free_area *area,
 {
 	struct page *pframe = list_first_entry_or_null(&area->free_list[migratetype],
 												struct page, lru);
-	// INIT_LIST_HEAD(&pframe->versions);
-	// spin_lock_init(&pframe->versions_lock);
 
 	return pframe;
 }

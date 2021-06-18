@@ -864,7 +864,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	int marked = pte_rmarked(pte);
 	struct mm_struct *mm = dst_vma->vm_mm;
 	struct page_marking *marking;
-	struct page_version *version;
+	struct page_snap *snap;
 	int count;
 #endif
 
@@ -884,15 +884,15 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		
 #ifdef CONFIG_TOCTTOU_PROTECTION
 		if (marked){
-			if(mutex_trylock(&page->versions_lock) == 0)
+			if(mutex_trylock(&page->snaps_lock) == 0)
 				return -EAGAIN;
 			if(mutex_trylock(&mm->marked_pages_lock) == 0){
-				mutex_unlock(&page->versions_lock);
+				mutex_unlock(&page->snaps_lock);
 				return -EAGAIN;
 			}
 			count = 0;
-			list_for_each_entry(version, &page->versions, other_nodes) {
-				if(version->copy == NULL)
+			list_for_each_entry(snap, &page->snaps, other_nodes) {
+				if(snap->copy == NULL)
 					count++;
 			}
 			BUG_ON(count == 0);
@@ -942,7 +942,7 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	 * returned > 0. Therefore, mutex was definitely locked, and rmap_dup called. */
 	if(page && marked) {
 		mutex_unlock(&mm->marked_pages_lock);
-		mutex_unlock(&page->versions_lock);
+		mutex_unlock(&page->snaps_lock);
 	}
 #endif
 	return 0;
@@ -2910,7 +2910,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	struct mmu_notifier_range range;
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	struct page *old_pframe, *new_pframe;
-	struct page_version *version, *next;
+	struct page_snap *snap, *next;
 	struct task_struct *task;
 	struct page_copy *dup = NULL;
 	int owner_release_count = 0, owner_retained_count = 0;
@@ -2975,20 +2975,20 @@ retry_wp_page_copy:
 		if((vmf->flags & FAULT_FLAG_TOCTTOU_USER) && pte_rmarked(entry) && !pte_rmarked_savedwrite(entry)) {
 			BUG_ON(old_page == NULL);
 			BUG_ON(new_page == NULL);
-			BUG_ON(new_page->versions.next == NULL);
-			BUG_ON(new_page->versions.prev == NULL);
-			BUG_ON(old_page->versions.next == NULL);
-			BUG_ON(old_page->versions.prev == NULL);
+			BUG_ON(new_page->snaps.next == NULL);
+			BUG_ON(new_page->snaps.prev == NULL);
+			BUG_ON(old_page->snaps.next == NULL);
+			BUG_ON(old_page->snaps.prev == NULL);
 
 			/* Keeping copies of pointers to both frames, to be used later */
 			old_pframe = old_page;
 			new_pframe = new_page;
 			is_cow_tocttou = 1;
-			if(mutex_trylock(&old_pframe->versions_lock) == 0) {
+			if(mutex_trylock(&old_pframe->snaps_lock) == 0) {
 				spin_unlock(vmf->ptl);
 				goto retry_wp_page_copy;
 			}
-			mutex_lock(&new_pframe->versions_lock);
+			mutex_lock(&new_pframe->snaps_lock);
 		}
 #endif   /* CONFIG_TOCTTOU_PROTECTION */
 
@@ -3072,23 +3072,23 @@ retry_wp_page_copy:
 	 * - PT frame ptl lock held
 	 * - rmap created for new frame
 	 * - rmappings for old frame modified
-	 * - hold versions_lock on both old and new pframe
-	 * - old_pframe holds all versions in its list
+	 * - hold snaps_lock on both old and new pframe
+	 * - old_pframe holds all snaps in its list
 	 */
 	if(is_cow_tocttou) {
-		/* Handle part 1 of COW TOCTTOU: Migrating pframe versions to new pframe
+		/* Handle part 1 of COW TOCTTOU: Migrating pframe snaps to new pframe
 		 * Here, we do two things:
-		 * - Move versions for this address space to new pframe
+		 * - Move snaps for this address space to new pframe
 		 * - Modify marked frames for all tasks in this address space, to point 
 		 *   to the new frame
 		 */
-		list_for_each_entry_safe(version, next, &old_pframe->versions, other_nodes) {
-			/* A version of a COW frame cannot already be duplicated */
-			BUG_ON(version->copy);
+		list_for_each_entry_safe(snap, next, &old_pframe->snaps, other_nodes) {
+			/* A snap of a COW frame cannot already be duplicated */
+			BUG_ON(snap->copy);
 
-			task = version->task;
+			task = snap->task;
 			/* For each task in the same process (which share the same mm struct)
-				* which have a version of this COW frame, we will have to update their
+				* which have a snap of this COW frame, we will have to update their
 				* markings to point to the newly allocated frame */
 			if(task->mm == current->mm) {
 				mutex_lock(&task->markings_lock);
@@ -3100,12 +3100,12 @@ retry_wp_page_copy:
 						updated_marking += 1;
 					}
 				}
-				/* Old pframe has a version for this task. The task *must* have 
+				/* Old pframe has a snap for this task. The task *must* have 
 				 * one corresponding marked frame in its list, thus must have updated
 				 * it */
 				BUG_ON(updated_marking != 1);
 
-				list_move(&version->other_nodes, &new_pframe->versions);
+				list_move(&snap->other_nodes, &new_pframe->snaps);
 				mutex_unlock(&task->markings_lock);
 				owner_release_count++;
 			} else
@@ -3115,25 +3115,25 @@ retry_wp_page_copy:
 		/* Part 2 of COW TOCTTOU: Unmarking pages in VA space */
 		/* Early unlock to allow rmap walks to edit permissions.
 		 * After this, other readers using raw_copy_from_user can find the new
-		 * pframe, but waits on its versions_lock which is still held. 
+		 * pframe, but waits on its snaps_lock which is still held. 
 		 */
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
-		/* Reverse walk to unmark the virtual pages with the number of versions
+		/* Reverse walk to unmark the virtual pages with the number of snaps
 		 * which were released (passed as the argument field = owner_release_count
 		 * in rwc struct) */
 		if (owner_release_count > 0)
 			rmap_walk(old_pframe, &rwc);
 
 		/* Create duplicates for readers of new frame */
-		list_for_each_entry(version, &new_pframe->versions, other_nodes) {
-			if(version->copy == NULL) {
+		list_for_each_entry(snap, &new_pframe->snaps, other_nodes) {
+			if(snap->copy == NULL) {
 				if(!dup){
 					dup = tocttou_duplicate_page_alloc(); 
 					BUG_ON(dup == NULL);
 					memcpy(&dup->data, page_address(new_pframe), PAGE_SIZE);
 				} 
 				dup->refcount++;
-				version->copy = dup;
+				snap->copy = dup;
 			}
 		}
 		/* VMAs mapping this frame will have owner counts reflecting also those
@@ -3143,8 +3143,8 @@ retry_wp_page_copy:
 		rmap_walk(new_pframe, &rwc);
 
 		//TODO: Optimize, might be able to release old pframe's lock earlier
-		mutex_unlock(&old_pframe->versions_lock);
-		mutex_unlock(&new_pframe->versions_lock);
+		mutex_unlock(&old_pframe->snaps_lock);
+		mutex_unlock(&new_pframe->snaps_lock);
 	}
 
 	/* Releasing page *after* unlocking PTL. Hope it does not have
@@ -3477,7 +3477,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	void *shadow = NULL;
 #ifdef CONFIG_TOCTTOU_PROTECTION
   struct page_marking *marking;
-	struct page_version *version;
+	struct page_snap *snap;
 	int count = 0, tocttou_locked = 0;
 #endif
 
@@ -3599,7 +3599,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	cgroup_throttle_swaprate(page, GFP_KERNEL);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_lock(&page->versions_lock);
+	mutex_lock(&page->snaps_lock);
 	mutex_lock(&vma->vm_mm->marked_pages_lock);
 	tocttou_locked = 1;
 #endif
@@ -3643,11 +3643,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte = pte_wrprotect(pte);
 	}
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	if(!list_empty(&page->versions)){
+	if(!list_empty(&page->snaps)){
 		pte = pte_rmark(pte);
 
 		count = 0;
-		list_for_each_entry(version, &page->versions, other_nodes) {
+		list_for_each_entry(snap, &page->snaps, other_nodes) {
 			count++;
 		}
 		marking = tocttou_page_marking_alloc();
@@ -3701,7 +3701,7 @@ out:
 #ifdef CONFIG_TOCTTOU_PROTECTION
   if(tocttou_locked) {
 		mutex_unlock(&vma->vm_mm->marked_pages_lock);
-		mutex_unlock(&page->versions_lock);
+		mutex_unlock(&page->snaps_lock);
 	}
 #endif
 	return ret;
@@ -3709,7 +3709,7 @@ out_nomap:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	mutex_unlock(&vma->vm_mm->marked_pages_lock);
-	mutex_unlock(&page->versions_lock);
+	mutex_unlock(&page->snaps_lock);
 #endif
 out_page:
 	unlock_page(page);
@@ -4599,7 +4599,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	struct page *pframe;
 	struct page_copy *dup = NULL;
-	struct page_version *version;
+	struct page_snap *snap;
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = { 
@@ -4666,14 +4666,14 @@ retry_duplication:
 	BUG_ON(pte_none(entry));
 
 	pframe = pte_page(entry);
-	/* Properly initialized pframe should have versions list initialized */
-	// BUG_ON(pframe->versions.next == NULL);
-	// BUG_ON(pframe->versions.prev == NULL);
+	/* Properly initialized pframe should have snaps list initialized */
+	// BUG_ON(pframe->snaps.next == NULL);
+	// BUG_ON(pframe->snaps.prev == NULL);
 	//TODO: Fix this hack to properly initialize pages.
 	//For now, initialize list for pages for which it has not yet been done
-	if(pframe->versions.next == NULL && pframe->versions.prev == NULL) {
-		mutex_init(&pframe->versions_lock);
-		INIT_LIST_HEAD(&pframe->versions);
+	if(pframe->snaps.next == NULL && pframe->snaps.prev == NULL) {
+		mutex_init(&pframe->snaps_lock);
+		INIT_LIST_HEAD(&pframe->snaps);
 	}
 
 	/* A page might be 
@@ -4686,41 +4686,41 @@ retry_duplication:
 	 *            which do not have a copy yet, and unmark.
 	 * Only handle the non-COW case here */
 	if((vmf->flags & FAULT_FLAG_TOCTTOU_USER) && pte_rmarked(entry) && pte_rmarked_savedwrite(entry)) {
-		mutex_lock(&pframe->versions_lock);	
+		mutex_lock(&pframe->snaps_lock);	
 
 		/* Slight chance that entry changed between orig_pte was read and now.
 		 * If so, retry. Everything before has no permanent effects */
 		if(unlikely(!pte_same(*vmf->pte, entry))) {
-			mutex_unlock(&pframe->versions_lock);	
+			mutex_unlock(&pframe->snaps_lock);	
 			goto retry_duplication;
 		}
 		
-		list_for_each_entry(version, &pframe->versions, other_nodes) {
+		list_for_each_entry(snap, &pframe->snaps, other_nodes) {
 			/* Duplicate for every syscall currently marking this frame
-			* which does not already have a version pframe */
-			if(version->copy == NULL) {
+			* which does not already have a snap pframe */
+			if(snap->copy == NULL) {
 				if(!dup){
 					dup = tocttou_duplicate_page_alloc(); 
 					BUG_ON(dup == NULL);
 					memcpy(&dup->data, page_address(pframe), PAGE_SIZE);
 				} 
 				dup->refcount++;
-				version->copy = dup;
+				snap->copy = dup;
 				owner_release_count++;
 			}
 		}
 		/* Having a NULL dup_pframe here means that none of the entries in the 
-		 * pframe's versions list lacked a duplicate. This should not happen,
-		 * since the page is marked only when a version is also added to the list
+		 * pframe's snaps list lacked a duplicate. This should not happen,
+		 * since the page is marked only when a snap is also added to the list
 		 * without a duplicate. 
-		 * Btw, we have checked above (within versions_lock mutex) that the 
+		 * Btw, we have checked above (within snaps_lock mutex) that the 
 		 * PTE has not changed, i.e. the page has not been concurrently 
 		 * unmarked. */
 		BUG_ON(dup == NULL);
 
 		/* Reverse walk to unmark all virtual pages */
 		rmap_walk(pframe, &rwc);
-		mutex_unlock(&pframe->versions_lock);
+		mutex_unlock(&pframe->snaps_lock);
 
 		return 0;
 	}
