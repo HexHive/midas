@@ -18,9 +18,18 @@ DEFINE_PER_CPU(struct page_marking *, prealloc_markings[CONFIG_MAX_PREALLOC]);
 DEFINE_PER_CPU(struct page_marking *, prealloc_markings[CONFIG_MAX_PREALLOC]);
 DEFINE_PER_CPU(int, prealloc_markings_count);
 DEFINE_PER_CPU(int, prealloc_markings_count);
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+static unsigned syscall_counter, snapshot_counter, copy_counter;
+#endif
 
 void __init tiktok_init(void) {
     int cpu, i;
+
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+    syscall_counter = 0;
+    snapshot_counter = 0;
+    copy_counter = 0;
+#endif
 
     duplicate_page_cache = kmem_cache_create("dup_page_cache", sizeof(struct page_copy), PAGE_SIZE, SLAB_POISON, NULL);
     BUG_ON(!duplicate_page_cache);
@@ -114,7 +123,6 @@ int should_mark(void) {
 		case __NR_pselect6:
 		case __NR_ppoll:
 		case __NR_rt_sigtimedwait:
-		case __NR_nanosleep:
 
 		// These calls were added as an optimization
 		// The OS usually is not interested in the content of write calls, so
@@ -474,6 +482,10 @@ void syscall_marking_cleanup() {
         .rmap_one = page_unmark_one,
         .anon_lock = page_lock_anon_vma_read,
     };
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+    unsigned long local_snapshot_counter = 0, local_copy_counter = 0;
+    unsigned long tmp;
+#endif
 
     /* Enabling interrupts to prevent warning when flushing
         * TLBs with smp_call_function_many_cond as part of this rwalk 
@@ -492,6 +504,9 @@ retry_syscall_cleanup:
             goto retry_syscall_cleanup;
         }
 
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+        local_snapshot_counter++;
+#endif
 		/* Find and delete version */
 		list_for_each_entry(version, &marked_frame->pframe->versions, other_nodes) {
 			if(version->task == current)
@@ -504,8 +519,12 @@ retry_syscall_cleanup:
          * the page-fault handler, which also unmarked them. 
          * For unduplicated ones, unmark */
 		if(version->copy) {
-            if(version->copy->refcount-- == 1)
+            if(version->copy->refcount-- == 1) {
     			tocttou_duplicate_page_free(version->copy);
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+                local_copy_counter++;
+#endif
+            }
         } else {
             /* Reverse walk to unmark all virtual pages */
             rmap_walk(marked_frame->pframe, &rwc);
@@ -521,6 +540,18 @@ retry_syscall_cleanup:
 
     if(irq_dis)
         local_irq_disable();
+
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+    __atomic_add_fetch (&snapshot_counter, local_snapshot_counter, __ATOMIC_RELAXED);
+    __atomic_add_fetch (&copy_counter, local_copy_counter, __ATOMIC_RELAXED);
+    tmp = __atomic_add_fetch (&syscall_counter, 1, __ATOMIC_SEQ_CST);
+
+    if((tmp & 0xffffful) == 0)
+        printk("Syscall %lu snapshot %lu copy %lu\n", 
+                    tmp, 
+                    __atomic_load_n (&snapshot_counter, __ATOMIC_RELAXED), 
+                    __atomic_load_n (&copy_counter, __ATOMIC_RELAXED));
+#endif
 }
 EXPORT_SYMBOL(syscall_marking_cleanup);
 
