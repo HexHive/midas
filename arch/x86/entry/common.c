@@ -43,20 +43,14 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	/* Set the initial state of the variables. We may not be in a syscall that marks
 	   pages. Remember in which call we are in. */
-	// current->tocttou_syscall = 0;
 	current->op_code = nr;
-	// if(current->pid > 1)
-	// 	printk("%d:%ld Starting syscall\n", current->pid, nr);
 	INIT_LIST_HEAD(&current->marked_frames);
 	mutex_init(&current->markings_lock);
-	// if(current->pid >= 144) printk("%d:%ld Starting syscall\n", current->pid, current->op_code);
 #endif 
 
 	instrumentation_begin();
 	if (likely(nr < NR_syscalls)) {
-		// if(current->pid >= 144 && current->op_code == 1) printk("    %d:%s:%d\n", current->pid, __func__, __LINE__);
 		nr = array_index_nospec(nr, NR_syscalls);
-		// if(current->pid >= 144 && current->op_code == 1) printk("    %d:%s:%d\n", current->pid, __func__, __LINE__);
 		regs->ax = sys_call_table[nr](regs);
 #ifdef CONFIG_X86_X32_ABI
 	} else if (likely((nr & __X32_SYSCALL_BIT) &&
@@ -66,20 +60,11 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 		regs->ax = x32_sys_call_table[nr](regs);
 #endif
 	}
-	// if(current->pid >= 144 && current->op_code == 1) printk("    %d:%s:%d\n", current->pid, __func__, __LINE__);
 	instrumentation_end();
-	// if(current->pid == 144 && current->op_code == 1) printk("    %s:%d\n", __func__, __LINE__);
 	syscall_exit_to_user_mode(regs);
-	// if(current->pid == 144 && current->op_code == 1) printk("    %s:%d\n", __func__, __LINE__);
-
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	// if(current->pid == 144)
-		// printk("%d:%ld Before ending syscall\n", current->pid, current->op_code);
 	syscall_marking_cleanup();
-
-	// current->tocttou_syscall = 0;
-	// if(current->pid >= 144)	printk("%d:%ld Ending syscall\n", current->pid, current->op_code);
 	BUG_ON(mutex_is_locked(&current->markings_lock));
 	current->op_code = -1;
 #endif
