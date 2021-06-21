@@ -2951,11 +2951,9 @@ void filemap_map_pages(struct vm_fault *vmf,
 	struct page *head, *page;
 	unsigned int mmap_miss = READ_ONCE(file->f_ra.mmap_miss);
 #ifdef CONFIG_TOCTTOU_PROTECTION
-  struct page_marking *marking;
 	struct page_snap *snap;
-	int count = 0, pteret, page_init_here = 0, marking_locked = 0;
-	pte_t *tmp_pte;
-	struct mm_struct *mm;
+	int pteret, page_init_here = 0;
+	pte_t *ptep;
 #endif
 
 	rcu_read_lock();
@@ -3001,57 +2999,34 @@ void filemap_map_pages(struct vm_fault *vmf,
 			vmf->pte += xas.xa_index - last_pgoff;
 		last_pgoff = xas.xa_index;
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	BUG_ON(page == NULL);
-	/* Hacky solution attempt for crashes within the following 
-	 * mutex lock for page->snaps_lock */
-	//TODO: Atri Have better page initialization
-	if(page->snaps.next == NULL && page->snaps.prev == NULL) {
-		mutex_init(&page->snaps_lock);
-		INIT_LIST_HEAD(&page->snaps);
-		page_init_here = 1;
-	}
-	mutex_lock(&page->snaps_lock);
-	
-	if(!list_empty(&page->snaps)){
-		BUG_ON(page_init_here);
-		mm = vmf->vma->vm_mm;
-		mutex_lock(&mm->marked_pages_lock);
-		marking_locked = 1;
-		/* Filemap may be called for pages already mapped, since its
-		 * called from do_fault_around. Check if page is marked and 
-		 * that there's a marking in the VMA */
-		list_for_each_entry(marking, &mm->marked_pages, other_nodes) {
-			if(marking->vaddr == vmf->address)
-				break;
+		BUG_ON(page == NULL);
+		/* Hacky solution attempt for crashes within the following 
+		* mutex lock for page->snaps_lock */
+		//TODO: Atri Have better page initialization
+		if(page->snaps.next == NULL && page->snaps.prev == NULL) {
+			mutex_init(&page->snaps_lock);
+			INIT_LIST_HEAD(&page->snaps);
+			page_init_here = 1;
 		}
-		if(&marking->other_nodes != &mm->marked_pages) {
-			tmp_pte = pte_offset_map(vmf->pmd, vmf->address);
-			BUG_ON(vmf->flags & FAULT_FLAG_TOCTTOU_FILE);
-			BUG_ON(!pte_rmarked(*tmp_pte));
-		} else {
-			/* Instead of marking PTE directly, set flag so that entry 
-			* gets marked in alloc_set_pte */
-			vmf->flags |= FAULT_FLAG_TOCTTOU_FILE;
-
-			count = 0;
+		mutex_lock(&page->snaps_lock);
+		ptep = pte_offset_map(vmf->pmd, vmf->address);
+		/* If not already protected, check if it needs to be protected, and 
+		* do so */
+		if(!pte_rmarked(*ptep)) {
 			list_for_each_entry(snap, &page->snaps, other_nodes) {
-				count++;
+				/* Having a NULL copy shows that it is in states 1 or 3 - i.e. protected */
+				if(snap->copy == NULL) {
+					/* Instead of marking PTE directly, set flag so that entry 
+					* gets marked in alloc_set_pte */
+					vmf->flags |= FAULT_FLAG_TOCTTOU_FILE;
+				}
 			}
-			marking = tocttou_page_marking_alloc();
-			marking->vaddr = vmf->address;
-			marking->owner_count = count;
-			list_add(&marking->other_nodes, &mm->marked_pages);
 		}
-		
-	}
-	pteret = alloc_set_pte(vmf, page);
-	if(marking_locked)
-		mutex_unlock(&mm->marked_pages_lock);
-	mutex_unlock(&page->snaps_lock);
-	vmf->flags &= ~FAULT_FLAG_TOCTTOU_FILE;
-	marking_locked = 0;
-	if(pteret)
-		goto unlock;
+		pteret = alloc_set_pte(vmf, page);
+		mutex_unlock(&page->snaps_lock);
+		vmf->flags &= ~FAULT_FLAG_TOCTTOU_FILE;
+		if(pteret)
+			goto unlock;
 #else
 		if (alloc_set_pte(vmf, page))
 			goto unlock;
@@ -3465,10 +3440,9 @@ ssize_t generic_perform_write(struct file *file,
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	struct page_copy *dup_copy = NULL;
 	struct page_snap *snap;
-	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = { 
-			.arg = &owner_release_count,
+			.arg = NULL,
 			.rmap_one = page_unmark_one,
 			.anon_lock = page_lock_anon_vma_read,
 		};
@@ -3538,7 +3512,6 @@ again:
 						} 
 						dup_copy->refcount++;
 						snap->copy = dup_copy;
-						owner_release_count++;
 					}
 				}
 				/* Having a NULL dup_pframe here means that none of the entries in the 

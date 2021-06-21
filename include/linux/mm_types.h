@@ -312,14 +312,6 @@ struct vm_userfaultfd_ctx {
 struct vm_userfaultfd_ctx {};
 #endif /* CONFIG_USERFAULTFD */
 
-#ifdef CONFIG_TOCTTOU_PROTECTION
-struct page_marking {
-	unsigned long vaddr;
-	int owner_count;
-	struct list_head other_nodes;
-};
-#endif
-
 /*
  * This struct describes a virtual memory area. There is one of these
  * per VM-area/task. A VM area is any part of the process virtual memory
@@ -586,12 +578,6 @@ struct mm_struct {
 
 #ifdef CONFIG_IOMMU_SUPPORT
 		u32 pasid;
-#endif
-
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	/* List of marked pages, storing their marked count */
-	struct list_head marked_pages;
-	struct mutex marked_pages_lock;
 #endif
 	} __randomize_layout;
 

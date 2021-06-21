@@ -850,29 +850,17 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 static inline int
 copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		 pte_t *dst_pte, pte_t *src_pte, unsigned long addr, int *rss,
-#ifndef CONFIG_TOCTTOU_PROTECTION
 		 struct page **prealloc)
-#else
-     struct page **prealloc, struct page_marking **marking_ptr)
-#endif
 {
 	struct mm_struct *src_mm = src_vma->vm_mm;
 	unsigned long vm_flags = src_vma->vm_flags;
 	pte_t pte = *src_pte;
 	struct page *page;
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	int marked = pte_rmarked(pte);
-	struct mm_struct *mm = dst_vma->vm_mm;
-	struct page_marking *marking;
-	struct page_snap *snap;
-	int count;
-#endif
 
 	page = vm_normal_page(src_vma, addr, pte);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	/* I hope marked pages should be normal */
-	BUG_ON(marked && !page);
-	// BUG_ON(!marked && !pte_write(pte) && (vm_flags && VM_MAYWRITE) && !is_cow_mapping(vm_flags));
+	BUG_ON(pte_rmarked(pte) && !page);
 #endif
 	if (page) {
 		int retval;
@@ -882,29 +870,6 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		if (retval <= 0)
 			return retval;
 		
-#ifdef CONFIG_TOCTTOU_PROTECTION
-		if (marked){
-			if(mutex_trylock(&page->snaps_lock) == 0)
-				return -EAGAIN;
-			if(mutex_trylock(&mm->marked_pages_lock) == 0){
-				mutex_unlock(&page->snaps_lock);
-				return -EAGAIN;
-			}
-			count = 0;
-			list_for_each_entry(snap, &page->snaps, other_nodes) {
-				if(snap->copy == NULL)
-					count++;
-			}
-			BUG_ON(count == 0);
-
-			marking = *marking_ptr;
-			BUG_ON(marking == NULL);
-			*marking_ptr = NULL;
-			marking->vaddr = addr;
-			marking->owner_count = count;
-			list_add(&marking->other_nodes, &mm->marked_pages);
-		}
-#endif
 		get_page(page);
 		page_dup_rmap(page, false);
 		rss[mm_counter(page)]++;
@@ -915,7 +880,6 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	 * in the parent and the child
 	 */
 	if (is_cow_mapping(vm_flags) && pte_write(pte)) {
-		BUG_ON(marked);
 		ptep_set_wrprotect(src_mm, addr, src_pte);
 		pte = pte_wrprotect(pte);
 	}
@@ -937,14 +901,6 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		pte = pte_clear_uffd_wp(pte);
 
 	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	/* If marked, has page. Also, if it reached here, copy_present_page 
-	 * returned > 0. Therefore, mutex was definitely locked, and rmap_dup called. */
-	if(page && marked) {
-		mutex_unlock(&mm->marked_pages_lock);
-		mutex_unlock(&page->snaps_lock);
-	}
-#endif
 	return 0;
 }
 
@@ -981,15 +937,6 @@ copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	int rss[NR_MM_COUNTERS];
 	swp_entry_t entry = (swp_entry_t){0};
 	struct page *prealloc = NULL;
-#ifdef CONFIG_TOCTTOU_PROTECTION
-	int page_count = ((end - addr) / PAGE_SIZE);
-	struct page_marking *prealloc_page_marking[page_count];
-	int marking_count;
-	/* Prealloc markings for all pages that might get marked */
-	for(marking_count = 0; marking_count < page_count; marking_count++) 
-		prealloc_page_marking[marking_count] = tocttou_page_marking_alloc();
-	marking_count = 0;
-#endif
 
 
 again:
@@ -1033,18 +980,8 @@ again:
 			continue;
 		}
 		/* copy_present_pte() will clear `*prealloc' if consumed */
-#ifdef CONFIG_TOCTTOU_PROTECTION
-		/* Will also clear prealloc_page_marking if consumed */
-		BUG_ON(marking_count >= page_count);
-		BUG_ON(prealloc_page_marking[marking_count] == NULL);
-		ret = copy_present_pte(dst_vma, src_vma, dst_pte, src_pte,
-													addr, rss, &prealloc, &prealloc_page_marking[marking_count]);
-		if(prealloc_page_marking[marking_count] == NULL)
-			marking_count++;
-#else
 		ret = copy_present_pte(dst_vma, src_vma, dst_pte, src_pte,
 				       addr, rss, &prealloc);
-#endif
 		/*
 		 * If we need a pre-allocated page for this pte, drop the
 		 * locks, allocate, and try again.
@@ -1091,10 +1028,6 @@ again:
 out:
 	if (unlikely(prealloc))
 		put_page(prealloc);
-#ifdef CONFIG_TOCTTOU_PROTECTION
-  for(; marking_count < page_count; marking_count++) 
-		tocttou_page_marking_free(prealloc_page_marking[marking_count]);
-#endif
 
 	return ret;
 }
@@ -2913,12 +2846,12 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 	struct page_snap *snap, *next;
 	struct task_struct *task;
 	struct page_copy *dup = NULL;
-	int owner_release_count = 0, owner_retained_count = 0;
+	int owner_retained_count = 0;
 	struct marked_frame *marking;
 	int is_cow_tocttou = 0, updated_marking = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = { 
-			.arg = &owner_release_count,
+			.arg = NULL,
 			.rmap_one = page_unmark_one,
 			.anon_lock = page_lock_anon_vma_read,
 		};
@@ -3107,7 +3040,6 @@ retry_wp_page_copy:
 
 				list_move(&snap->other_nodes, &new_pframe->snaps);
 				mutex_unlock(&task->markings_lock);
-				owner_release_count++;
 			} else
 				owner_retained_count++;
 		}
@@ -3118,10 +3050,8 @@ retry_wp_page_copy:
 		 * pframe, but waits on its snaps_lock which is still held. 
 		 */
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
-		/* Reverse walk to unmark the virtual pages with the number of snaps
-		 * which were released (passed as the argument field = owner_release_count
-		 * in rwc struct) */
-		if (owner_release_count > 0)
+		/* If no syscall has snapshots of the old page, unprotect it */
+		if (owner_retained_count == 0)
 			rmap_walk(old_pframe, &rwc);
 
 		/* Create duplicates for readers of new frame */
@@ -3136,10 +3066,7 @@ retry_wp_page_copy:
 				snap->copy = dup;
 			}
 		}
-		/* VMAs mapping this frame will have owner counts reflecting also those
-		 * from the old frame. Therefore, the actual count to be released is the
-		 * sum of the two */
-		owner_release_count += owner_retained_count; 
+		/* New page will be written to, so all mappings to it get unprotected */
 		rmap_walk(new_pframe, &rwc);
 
 		//TODO: Optimize, might be able to release old pframe's lock earlier
@@ -3476,9 +3403,8 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	vm_fault_t ret = 0;
 	void *shadow = NULL;
 #ifdef CONFIG_TOCTTOU_PROTECTION
-  struct page_marking *marking;
 	struct page_snap *snap;
-	int count = 0, tocttou_locked = 0;
+	int tocttou_locked = 0;
 #endif
 
 	if (!pte_unmap_same(vma->vm_mm, vmf->pmd, vmf->pte, vmf->orig_pte))
@@ -3600,7 +3526,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	mutex_lock(&page->snaps_lock);
-	mutex_lock(&vma->vm_mm->marked_pages_lock);
 	tocttou_locked = 1;
 #endif
 	/*
@@ -3643,18 +3568,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte = pte_wrprotect(pte);
 	}
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	if(!list_empty(&page->snaps)){
-		pte = pte_rmark(pte);
-
-		count = 0;
-		list_for_each_entry(snap, &page->snaps, other_nodes) {
-			count++;
-		}
-		marking = tocttou_page_marking_alloc();
-		marking->vaddr = vmf->address;
-		marking->owner_count = count;
-		list_add(&marking->other_nodes, &vma->vm_mm->marked_pages);
-	} 
+	list_for_each_entry(snap, &page->snaps, other_nodes) {
+		/* Null copy means page is protected */
+		if(snap->copy == NULL)
+			pte = pte_rmark(pte);
+	}
 #endif
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
 	arch_do_swap_page(vma->vm_mm, vma, vmf->address, pte, vmf->orig_pte);
@@ -3699,16 +3617,13 @@ unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 out:
 #ifdef CONFIG_TOCTTOU_PROTECTION
-  if(tocttou_locked) {
-		mutex_unlock(&vma->vm_mm->marked_pages_lock);
+  if(tocttou_locked) 
 		mutex_unlock(&page->snaps_lock);
-	}
 #endif
 	return ret;
 out_nomap:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 #ifdef CONFIG_TOCTTOU_PROTECTION
-	mutex_unlock(&vma->vm_mm->marked_pages_lock);
 	mutex_unlock(&page->snaps_lock);
 #endif
 out_page:
@@ -4603,7 +4518,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	int owner_release_count = 0;
 	/* Pre-setup for structure which walks reverse mappings for a frame */
 	struct rmap_walk_control rwc = { 
-		.arg = &owner_release_count,
+		.arg = NULL,
 		.rmap_one = page_unmark_one,
 		.anon_lock = page_lock_anon_vma_read,
 	};
