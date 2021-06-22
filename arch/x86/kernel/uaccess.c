@@ -84,13 +84,9 @@ int should_mark(void) {
 		// Finit_module and exit were left after the debugging run, but the system
 		// runs perfectly fine with the protected
 		case __NR_futex:
-		case __NR_poll:
-		case __NR_select:
 		case __NR_execve:
 		//case __NR_finit_module:
 		//case __NR_exit:
-		case __NR_pselect6:
-		case __NR_ppoll:
 		case __NR_rt_sigtimedwait:
 
 		// These calls were added as an optimization
@@ -283,6 +279,7 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
         if(sysc_snap == NULL) {  /* No snapshot for this syscall */
             sysc_snap = (struct page_snap *)kmem_cache_alloc(snaps_cache, GFP_KERNEL);
             BUG_ON(sysc_snap == NULL);
+            BUG_ON(current == NULL);
             sysc_snap->task = current;
             sysc_snap->copy = NULL;
             /* New snap for the page frame */
@@ -378,6 +375,7 @@ EXPORT_SYMBOL(raw_copy_from_user);
 
 void syscall_marking_cleanup() {
 	struct marked_frame *marked_frame, *next;
+    struct task_struct *curtsk = current;
 	struct page_snap *iter_snap = NULL, *sysc_snap = NULL;
     int irq_dis, count_undup;
     struct rmap_walk_control rwc = {
@@ -398,12 +396,12 @@ void syscall_marking_cleanup() {
 
 retry_syscall_cleanup:
 	/* Reset the system call information */	
-    mutex_lock(&current->markings_lock);
-	list_for_each_entry_safe(marked_frame, next, &current->marked_frames, other_nodes) {
+    mutex_lock(&curtsk->markings_lock);
+	list_for_each_entry_safe(marked_frame, next, &curtsk->marked_frames, other_nodes) {
         /* Preventing mutex deadlock with COW tocttou page duplication code by backing
          * off */
         if(mutex_trylock(&marked_frame->pframe->snaps_lock) == 0) {
-            mutex_unlock(&current->markings_lock);
+            mutex_unlock(&curtsk->markings_lock);
             goto retry_syscall_cleanup;
         }
 
@@ -413,7 +411,7 @@ retry_syscall_cleanup:
 		/* Find and delete snap */
         count_undup = 0;
 		list_for_each_entry(iter_snap, &marked_frame->pframe->snaps, other_nodes) {
-			if(iter_snap->task == current)
+			if(iter_snap->task == curtsk)
 				sysc_snap = iter_snap;
             if(iter_snap->copy == NULL)
                 count_undup++;
@@ -441,7 +439,7 @@ retry_syscall_cleanup:
         mutex_unlock(&marked_frame->pframe->snaps_lock);
 		kmem_cache_free(marked_frames_cache, marked_frame);
 	}
-    mutex_unlock(&current->markings_lock);
+    mutex_unlock(&curtsk->markings_lock);
 
     if(irq_dis)
         local_irq_disable();

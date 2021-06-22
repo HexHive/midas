@@ -2952,7 +2952,7 @@ void filemap_map_pages(struct vm_fault *vmf,
 	unsigned int mmap_miss = READ_ONCE(file->f_ra.mmap_miss);
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	struct page_snap *snap;
-	int pteret, page_init_here = 0;
+	int pteret;
 	pte_t *ptep;
 #endif
 
@@ -3006,7 +3006,6 @@ void filemap_map_pages(struct vm_fault *vmf,
 		if(page->snaps.next == NULL && page->snaps.prev == NULL) {
 			mutex_init(&page->snaps_lock);
 			INIT_LIST_HEAD(&page->snaps);
-			page_init_here = 1;
 		}
 		mutex_lock(&page->snaps_lock);
 		ptep = pte_offset_map(vmf->pmd, vmf->address);

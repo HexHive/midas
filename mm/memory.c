@@ -2908,8 +2908,10 @@ retry_wp_page_copy:
 		if((vmf->flags & FAULT_FLAG_TOCTTOU_USER) && pte_rmarked(entry) && !pte_rmarked_savedwrite(entry)) {
 			BUG_ON(old_page == NULL);
 			BUG_ON(new_page == NULL);
-			BUG_ON(new_page->snaps.next == NULL);
 			BUG_ON(new_page->snaps.prev == NULL);
+			BUG_ON(new_page->snaps.next == NULL);
+			BUG_ON(new_page->snaps.next != &new_page->snaps);
+			BUG_ON(new_page->snaps.prev != &new_page->snaps);
 			BUG_ON(old_page->snaps.next == NULL);
 			BUG_ON(old_page->snaps.prev == NULL);
 
@@ -3568,8 +3570,11 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte = pte_wrprotect(pte);
 	}
 #ifdef CONFIG_TOCTTOU_PROTECTION
+	/* So, we are swapping in this page, and we need to know if
+	 * its protected in some other address space. We do not already
+	 * have a PTE to check for marking. 
+	 * Thankfully, a snapshot with a NULL copy means page is protected (states 0, 2) */
 	list_for_each_entry(snap, &page->snaps, other_nodes) {
-		/* Null copy means page is protected */
 		if(snap->copy == NULL)
 			pte = pte_rmark(pte);
 	}
