@@ -2918,12 +2918,12 @@ retry_wp_page_copy:
 			/* Keeping copies of pointers to both frames, to be used later */
 			old_pframe = old_page;
 			new_pframe = new_page;
-			is_cow_tocttou = 1;
 			if(mutex_trylock(&old_pframe->snaps_lock) == 0) {
 				spin_unlock(vmf->ptl);
 				goto retry_wp_page_copy;
 			}
 			mutex_lock(&new_pframe->snaps_lock);
+			is_cow_tocttou = 1;
 		}
 #endif   /* CONFIG_TOCTTOU_PROTECTION */
 
