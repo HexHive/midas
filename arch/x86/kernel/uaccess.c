@@ -292,6 +292,9 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
             list_add(&new_marked_pframe->other_nodes, &current->marked_frames);
             copy_vaddr = page_address(pframe);
 
+            /* Get a refcount on the page, to prevent it from being freed to LRU lists */
+            get_page(pframe);
+
             /* If unduped, some snapshot had a NULL copy i.e. was pointing to the latest copy.
              * => In states 1 or 3, where page is already protected.
              * If !unduped, no snapshot points to the latest copy.
@@ -432,6 +435,9 @@ retry_syscall_cleanup:
             if(count_undup == 1)
                 rmap_walk(marked_frame->pframe, &rwc);
         }
+        /* Releasing refcount on page, allowing it to be released to LRU lists */
+        put_page(marked_frame->pframe);
+
 		list_del(&sysc_snap->other_nodes);
 		kmem_cache_free(snaps_cache, sysc_snap);
 
