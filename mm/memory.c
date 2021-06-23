@@ -3041,6 +3041,9 @@ retry_wp_page_copy:
 				BUG_ON(updated_marking != 1);
 
 				list_move(&snap->other_nodes, &new_pframe->snaps);
+				put_page(old_pframe);
+				get_page(new_pframe);
+				
 				mutex_unlock(&task->markings_lock);
 			} else
 				owner_retained_count++;
