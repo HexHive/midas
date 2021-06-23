@@ -87,7 +87,6 @@ int should_mark(void) {
 		case __NR_execve:
 		//case __NR_finit_module:
 		//case __NR_exit:
-		case __NR_rt_sigtimedwait:
 
 		// These calls were added as an optimization
 		// The OS usually is not interested in the content of write calls, so
