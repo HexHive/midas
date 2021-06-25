@@ -61,13 +61,15 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 #endif
 	}
 	instrumentation_end();
-	syscall_exit_to_user_mode(regs);
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	syscall_marking_cleanup();
 	BUG_ON(mutex_is_locked(&current->markings_lock));
 	current->op_code = -1;
 #endif
+
+	syscall_exit_to_user_mode(regs);
+
 }
 #endif
 
