@@ -1726,6 +1726,7 @@ source "kernel/bpf/preload/Kconfig"
 config USERFAULTFD
 	bool "Enable userfaultfd() system call"
 	depends on MMU
+	depends on !TOCTTOU_PROTECTION
 	help
 	  Enable the userfaultfd() system call that allows to intercept and
 	  handle page faults in userland.
