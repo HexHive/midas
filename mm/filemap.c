@@ -3513,16 +3513,9 @@ again:
 						snap->copy = dup_copy;
 					}
 				}
-				/* Having a NULL dup_pframe here means that none of the entries in the 
-				* pframe's snaps list lacked a duplicate. This should not happen,
-				* since the page is marked only when a snap is also added to the list
-				* without a duplicate. 
-				* Btw, we have checked above (within snaps_lock mutex) that the 
-				* PTE has not changed, i.e. the page has not been concurrently 
-				* unmarked. */
-				BUG_ON(dup_copy == NULL);
 				/* Reverse walk to unmark all virtual pages */
-				rmap_walk(page, &rwc);
+				if(dup_copy)
+					rmap_walk(page, &rwc);
 			}
 			mutex_unlock(&page->snaps_lock);
 		}

@@ -870,6 +870,10 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		if (retval <= 0)
 			return retval;
 		
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		if(mutex_trylock(&page->snaps_lock) == 0)
+			return -EAGAIN;
+#endif
 		get_page(page);
 		page_dup_rmap(page, false);
 		rss[mm_counter(page)]++;
@@ -897,10 +901,19 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	 * does not have the VM_UFFD_WP, which means that the uffd
 	 * fork event is not enabled.
 	 */
-	if (!(vm_flags & VM_UFFD_WP))
+	if (!(vm_flags & VM_UFFD_WP)){
+#ifdef CONFIG_TOCTTOU_PROTECTION
+		/*This clear is a nop when TikTok is enabled */
+#endif
 		pte = pte_clear_uffd_wp(pte);
+	}
 
 	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
+
+#ifdef CONFIG_TOCTTOU_PROTECTION
+	if(page)
+		mutex_unlock(&page->snaps_lock);
+#endif
 	return 0;
 }
 
@@ -1252,6 +1265,10 @@ again:
 				    details->check_mapping != page_rmapping(page))
 					continue;
 			}
+#ifdef CONFIG_TOCTTOU_PROTECTION
+			if(page && (mutex_trylock(&page->snaps_lock) == 0)) 
+				break;
+#endif
 			ptent = ptep_get_and_clear_full(mm, addr, pte,
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
@@ -1269,6 +1286,9 @@ again:
 			}
 			rss[mm_counter(page)]--;
 			page_remove_rmap(page, false);
+#ifdef CONFIG_TOCTTOU_PROTECTION
+			mutex_unlock(&page->snaps_lock);
+#endif
 			if (unlikely(page_mapcount(page) < 0))
 				print_bad_pte(vma, addr, ptent, page);
 			if (unlikely(__tlb_remove_page(tlb, page))) {
