@@ -92,8 +92,8 @@ int should_mark(void) {
 		// The OS usually is not interested in the content of write calls, so
 		// they do not need to be protected
 		case __NR_writev:
-		case __NR_pwrite64:
 		case __NR_pwritev2:
+		case __NR_pwrite64:
 		case __NR_write:
 			return 0;
 		
@@ -126,15 +126,6 @@ int should_mark(void) {
 	}
 
     return 1;
-    
-    /* Allowlist for testing */
-    switch (current->op_code) {
-        case __NR_write:
-        case __NR_pipe:
-            return 1;
-    }
-
-    return 0;
 }
 
 
