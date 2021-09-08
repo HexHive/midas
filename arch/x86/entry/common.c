@@ -36,9 +36,18 @@
 #include <asm/irq_stack.h>
 
 #ifdef CONFIG_X86_64
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+static uint64_t syscall_counts[__NR_syscall_max] = {0};
+static uint64_t total_syscall_count = 0, bit32_syscall_count = 0;
+#endif
 __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 {
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+	uint64_t i, total;
+#endif
+
 	nr = syscall_enter_from_user_mode(regs, nr);
+	
 
 #ifdef CONFIG_TOCTTOU_PROTECTION
 	/* Set the initial state of the variables. We may not be in a syscall that marks
@@ -46,6 +55,22 @@ __visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
 	current->op_code = nr;
 	INIT_LIST_HEAD(&current->marked_frames);
 	mutex_init(&current->markings_lock);
+#ifdef CONFIG_TOCTTOU_ACCOUNTING
+	total = __atomic_fetch_add(&total_syscall_count, 1, __ATOMIC_SEQ_CST);
+	if(nr <= __NR_syscall_max) {
+		__atomic_fetch_add (&syscall_counts[nr], 1, __ATOMIC_SEQ_CST);
+		if((total & 0xfffffful) == 0) {
+			printk(KERN_INFO "Syscall counts (%llu, %llu):\n",
+						__atomic_load_n(&bit32_syscall_count, __ATOMIC_SEQ_CST),
+						total);
+			for(i = 0; i <= __NR_syscall_max; i++) {
+				printk(KERN_INFO "%llu\n", __atomic_load_n(&syscall_counts[i], __ATOMIC_SEQ_CST));
+			}
+		}
+	} else {
+		__atomic_fetch_add(&bit32_syscall_count, 1, __ATOMIC_SEQ_CST);
+	}
+#endif
 #endif 
 
 	instrumentation_begin();
