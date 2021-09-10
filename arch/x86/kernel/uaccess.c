@@ -314,12 +314,6 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
 }
 
 unsigned long __must_check
-raw_copy_to_user(void __user *dst, const void *src, unsigned long size) {
-    return __raw_copy_to_user(dst, src, size);
-}
-EXPORT_SYMBOL(raw_copy_to_user);
-
-unsigned long __must_check
 raw_copy_from_user(void *dst, const void __user *src, unsigned long size) {
     uintptr_t id, address, cur_dst, cur_src;
     unsigned long cur_sz, remaining_sz, unread_sz;
