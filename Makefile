@@ -2,7 +2,7 @@
 VERSION = 5
 PATCHLEVEL = 11
 SUBLEVEL = 0
-EXTRAVERSION = -tiktok
+EXTRAVERSION = -midas
 NAME = 💕 Valentine's Day Edition 💕
 
 # *DOCUMENTATION*
