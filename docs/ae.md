@@ -188,3 +188,18 @@ a run, and for others it reports operations per unit time
 
 Phoronix will print the benchmark results to the terminal.
 
+#### NASA Parallel Benchmarks
+
+Running these benchmarks is meaningful only on real hardware, not in a VM.
+
+You will need to repeat the following steps for the baseline kernel, and
+for the midas kernel.
+After both runs, you should be able to compute relative performance.
+The benchmarks report performance as Mop/s for each workload.
+
+1. Restart the machine
+2. In the GRUB menu, choose the `baseline` or `midas` option.
+3. Log in at the welcome screen
+4. Open a terminal and run `~/scripts/run_npb.sh`.
+
+NPB will print the benchmark results to the terminal.
