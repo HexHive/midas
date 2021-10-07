@@ -10,8 +10,8 @@ This guide is meant to enable you to quickly create a working setup for testing
 the Midas kernel on either a real machine, or on QEMU.
 
 <p>
-Check out a <a href="{{ '/imgs/ae.img' | relative_url }}">sample disk image</a>
-for artefact evaluation.
+Download the compressed disk image
+<a href="https://zenodo.org/record/5555118">here.</a>
 </p>
 </div>
 </div>
@@ -22,6 +22,17 @@ You can run either a virtual machine or a real machine with this disk image.
 We shortly describe the necessary steps below.
 
 #### Contents of disk image
+
+The provided download is the compressed disk image.
+This must be uncompressed before following the rest of this guide.
+The following command will uncompress the file and provide a progress
+indicator. 
+This step can take an hour or two, so go take a stroll in the meantime.
+Using more threads might help speed it up.
+
+```
+pv ae.img.xz | unxz -T <num threads> > ae.img
+```
 
 The disk image contains one ~50GB partition holding Ubuntu with various
 kernels installed.
@@ -103,15 +114,15 @@ appear on the GRUB menu during booting:
 - `Ubuntu default` is the default kernel shipped with Ubuntu
   (linux-5.11.0-37-generic) and can be used as the baseline
 - `baseline` is mainline 5.11 kernel without Midas' modifications.
-  Generated from commit 3cd88530ea3a55218099e60c7f0df7ee5ccdffe2
+  Generated from commit `3cd88530ea3a55218099e60c7f0df7ee5ccdffe2`
 - `midas` is the Midas kernel based on 5.11.
-  Generated from commit acfbfde5dd74b6c08efbf1aa16389fad41b61170
+  Generated from commit `acfbfde5dd74b6c08efbf1aa16389fad41b61170`
 - `baseline-cve` is the baseline kernel with modifications detecting
   exploitation of CVE-2016-6516.
-  Generated from commit a93186e3babbd4cbeb500559428062595b7c668b
+  Generated from commit `a93186e3babbd4cbeb500559428062595b7c668b`
 - `midas-cve` is the midas kernel with modifications detecting
   exploitation of CVE-2016-6516.
-  Generated from commit 9088ea808c171b013bd16707e1cc550268cb3c60
+  Generated from commit `9088ea808c171b013bd16707e1cc550268cb3c60`
 
 For each kernel version, we have generated it with the following
 steps and commands:
