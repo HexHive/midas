@@ -1,8 +1,8 @@
 ---
-title: Quick Start Guide
+title: Artefact Evaluation Guide
 ---
 
-## Description
+### Description
 
 <div class="intro-container">
 <div style="width: 100%">
@@ -16,12 +16,12 @@ for artefact evaluation.
 </div>
 </div>
 
-## Running the disk image
+### Running the disk image
 
 You can run either a virtual machine or a real machine with this disk image.
 We shortly describe the necessary steps below.
 
-### Contents of disk image
+#### Contents of disk image
 
 The disk image contains one ~50GB partition holding Ubuntu with various
 kernels installed.
@@ -52,7 +52,7 @@ This binary does the following:
 - Enable perf recording for kernel
 - Enable printk in logs
 
-### Running a QEMU virtual machine
+#### Running a QEMU virtual machine
 
 ```
 qemu-system-x86_64                   \
@@ -80,7 +80,7 @@ The above command sets up a machine with:
 - firmware allowing booting a UEFI disk
 - a network (host port 2222 forwards to guest port 22)
 
-### Running on hardware
+#### Running on hardware
 
 The disk image is provided as a raw, sparse image. You can run this
 image on real hardware by writing the image to a HDD/SSD then booting
@@ -95,7 +95,7 @@ You will require a machine with:
 - UEFI boot enabled
 - Secure boot disabled
 
-### Grub menu
+#### Grub menu
 
 When starting a machine with this disk image, the following options should
 appear on the GRUB menu during booting:
@@ -124,7 +124,7 @@ steps and commands:
    `find /lib/modules/5.11.0<version> -iname "*.ko" -exec strip --strip-unneeded {} +`
 5. Install kernel and update grub `make install`
 
-## Testing and running artefact
+### Testing and running artefact
 
 In this tutorial, we will guide you through running the Midas kernel,
 and provided related information.
@@ -135,7 +135,7 @@ The following experiments are described:
 - How to run the microbenchmarks reported in the paper
 - How to run the Phoronix Test Suite benchmarks reported in the paper
 
-### Testing protection against CVE-2016-6516
+#### Testing protection against CVE-2016-6516
 
 We demonstrate how the baseline kernel is vulnerable to this
 double-fetch CVE, but the Midas kernel is not. The kernel setup
@@ -155,7 +155,7 @@ Next, test the Midas kernel. Follow steps 1-5, changing step 2
 to choose the 'midas-cve' option.
 In step 6, the bug trigger message should be absent from the output.
 
-### Phoronix Test Suite benchmarks
+#### Phoronix Test Suite benchmarks
 
 Running these benchmarks is meaningful only on real hardware, not in a VM.
 
