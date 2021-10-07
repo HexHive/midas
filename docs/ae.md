@@ -131,7 +131,8 @@ The following experiments are described:
 
 - How to run tests checking protection against CVE-2016-6516 as described in
   the paper.
-- How to run the Phoronix Test Suite benchmarks
+- How to run the microbenchmarks reported in the paper
+- How to run the Phoronix Test Suite benchmarks reported in the paper
 
 ### Testing protection against CVE-2016-6516
 
@@ -157,8 +158,21 @@ In step 6, the bug trigger message should be absent from the output.
 
 Running these benchmarks is meaningful only on real hardware, not in a VM.
 
-Please provide the below options when prompted for.
+You will need to repeat the following steps for the baseline kernel, and
+for the midas kernel.
+After both runs, you should be able to compute relative performance.
+Note that some benchmarks (pybench, git, linux build) report the time for
+a run, and for others it reports operations per unit time
+(openssl, redis, apache, nginx, ipc).
 
-Redis 1,2
-IPC 4 then 1
+1. Restart the machine
+2. In the GRUB menu, choose the `baseline` or `midas` option.
+3. Log in at the welcome screen
+4. Open a terminal and run `~/scripts/run_phoronix.sh`.
+5. Optionally, choose to save the results to a file
+6. Provide the below options when prompted for:
+    - For Redis choose options 1,2
+    - For IPC, choose option 4 then option 1
+
+Phoronix will print the benchmark results to the terminal.
 
