@@ -98,14 +98,21 @@ The disk image is provided as a raw, sparse image. You can run this
 image on real hardware by writing the image to a HDD/SSD then booting
 from that disk.
 
-dd command: `dd if=ae.img of=/dev/<disk> bs=100M`
-
 You will require a machine with:
 
 - a reasonably recent Intel CPU (e.g. i7-8700)
 - 1TB disk
-- UEFI boot enabled in the BIOS
-- Secure boot disabled in the BIOS
+
+First, enter the BIOS of the target machine, and make sure its using
+UEFI boot mode.
+Then disable the "Secure Boot" option.
+
+Then boot from a Live USB, so that you can copy the image to the
+actual disk.
+First, download the disk image and extract it as explained above.
+Then copy the disk image using the following `dd` command.
+
+```dd if=ae.img of=/dev/<disk> bs=100M```
 
 #### Grub menu
 
