@@ -34,6 +34,10 @@ Using more threads might help speed it up.
 pv ae.img.xz | unxz -T <num threads> > ae.img
 ```
 
+> Note: `pv` essentially provides the functionality of `cat`, but also 
+  provides a handy progress bar. You can replace any instance of `pv`
+  in this guide with `cat`.
+
 The disk image contains one ~50GB partition holding Ubuntu with various
 kernels installed.
 There is one user `midas` with password `midas`, who also has superuser
@@ -124,6 +128,11 @@ If it is a NVMe SSD, it might have a name such as `/dev/nvme0n1`.
 Then copy the image to the correct disk using the following `dd` command.
 
 ```dd if=ae.img of=/dev/<disk> bs=100M```
+
+> Note: You can combine the image uncompression operation and the 
+write to disk by running the following command
+
+``` pv ae.img.xz | unxz -T <num threads> | dd of=/dev/<disk>```
 
 #### Grub menu
 
