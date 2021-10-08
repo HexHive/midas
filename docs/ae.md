@@ -89,8 +89,13 @@ The above command sets up a machine with:
 - 4 CPU cores
 - the provided image `ae.img`
 - a default display
-- firmware allowing booting a UEFI disk
+- firmware allowing booting a UEFI disk (`OVMF.fd`)
 - a network (host port 2222 forwards to guest port 22)
+
+Note: If your computer complains about not having OVMF.fd, you 
+need to install the OVMF package for your distribution. 
+On Ubuntu, this is as easy as running 
+`sudo apt install ovmf`.
 
 #### Running on hardware
 
@@ -107,10 +112,16 @@ First, enter the BIOS of the target machine, and make sure its using
 UEFI boot mode.
 Then disable the "Secure Boot" option.
 
-Then boot from a Live USB, so that you can copy the image to the
-actual disk.
+Then boot from a Live USB. 
+In this state, the default machine runs off the USB, and the hard disk
+is not in use.
+Now, you can copy the image to the actual disk.
 First, download the disk image and extract it as explained above.
-Then copy the disk image using the following `dd` command.
+Then find the (1TB) disk you want to write the image to. 
+If it is a hard disk, it might have a name such as `/dev/sda` or 
+`/dev/sdb`. 
+If it is a NVMe SSD, it might have a name such as `/dev/nvme0n1`.
+Then copy the image to the correct disk using the following `dd` command.
 
 ```dd if=ae.img of=/dev/<disk> bs=100M```
 
@@ -132,8 +143,14 @@ appear on the GRUB menu during booting:
   exploitation of CVE-2016-6516.
   Generated from commit `9088ea808c171b013bd16707e1cc550268cb3c60`
 
+The disk image also contains a clone of the git repository with
+Midas' code (at `~/linux_midas`).
+For verifying our installed kernels, you may re-compile and re-install
+each of the kernels.
 For each kernel version, we have generated it with the following
-steps and commands:
+steps and commands.
+Note, this is not a necessary step. 
+We have already followed these instructions and installed the kernels.
 
 1. Checkout code version `git checkout <hash>`
 2. Compile kernel `make -j`
@@ -152,6 +169,7 @@ The following experiments are described:
 - How to run tests checking protection against CVE-2016-6516 as described in
   the paper.
 - How to run the microbenchmarks reported in the paper
+- How to run the NPB reported in the paper
 - How to run the Phoronix Test Suite benchmarks reported in the paper
 
 #### Testing protection against CVE-2016-6516
@@ -173,6 +191,25 @@ baseline kernel.
 Next, test the Midas kernel. Follow steps 1-5, changing step 2
 to choose the 'midas-cve' option.
 In step 6, the bug trigger message should be absent from the output.
+
+#### Microbenchmarks
+
+Running these benchmarks is meaningful only on real hardware, not in a VM.
+
+You will need to repeat the following steps for the baseline kernel, and
+for the midas kernel.
+After both runs, you should be able to compute relative performance.
+The benchmarks report performance as execution time per operation for
+each workload.
+
+1. Restart the machine
+2. In the GRUB menu, choose the `baseline` or `midas` option.
+3. Log in at the welcome screen
+4. Open a terminal and run `~/scripts/run_ubench.sh`.
+
+The OSBench microbenchmarks are nicely packaged into a OpenBenchmarks
+workload on Phoronix.
+The microbenchmark will print their results to the terminal.
 
 #### Phoronix Test Suite benchmarks
 
