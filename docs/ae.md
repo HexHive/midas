@@ -11,7 +11,7 @@ the Midas kernel on either a real machine, or on QEMU.
 
 <p>
 Download the compressed disk image
-<a href="https://zenodo.org/record/5555118">here.</a>
+<a href="https://zenodo.org/record/5555863">here.</a>
 </p>
 </div>
 </div>
@@ -44,6 +44,7 @@ Contained files:
 
 - Cloned source code for Midas kernel `~/linux_midas`.
 - Cloned exploit for CVE-2016-6516 in `~/CVE-2016-6516-exploit`.
+- Downloaded and build NPB in `~/NPB3.4.2`.
 - Installed Phoronix Test Suite and particular workloads.
 - Scripts for running useful tasks in `~/scripts`.
     1. run exploit CVE-2016-6516 (`run_cve_exploit.sh`)
@@ -103,8 +104,8 @@ You will require a machine with:
 
 - a reasonably recent Intel CPU (e.g. i7-8700)
 - 1TB disk
-- UEFI boot enabled
-- Secure boot disabled
+- UEFI boot enabled in the BIOS
+- Secure boot disabled in the BIOS
 
 #### Grub menu
 
