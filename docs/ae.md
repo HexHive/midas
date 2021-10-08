@@ -1,5 +1,5 @@
 ---
-title: Artefact Evaluation Guide
+title: Artifact Evaluation Guide
 ---
 
 ### Description
@@ -70,6 +70,12 @@ This binary does the following:
 
 #### Running a QEMU virtual machine
 
+The following command was tested with QEMU version 4.2.1
+available on Ubuntu 20.04. 
+Some of the options appear to be unavailable on an 
+older version (v2.3).
+
+
 ```
 qemu-system-x86_64                   \
   -m 4G                              \
@@ -134,6 +140,12 @@ write to disk by running the following command
 
 ``` pv ae.img.xz | unxz -T <num threads> | dd of=/dev/<disk>```
 
+After the disk image has been written to the disk, reboot the machine.
+During boot, make sure that you are booting from the disk you just
+wrote to.
+If you have more than one disk in the machine, you can choose to boot
+from a particular disk by editing your BIOS options.
+
 #### Grub menu
 
 When starting a machine with this disk image, the following options should
@@ -152,6 +164,9 @@ appear on the GRUB menu during booting:
   exploitation of CVE-2016-6516.
   Generated from commit `9088ea808c171b013bd16707e1cc550268cb3c60`
 
+> Note: Once booted, you can use the command `uname -r` to see the 
+  currently running kernel version. 
+
 The disk image also contains a clone of the git repository with
 Midas' code (at `~/linux_midas`).
 For verifying our installed kernels, you may re-compile and re-install
@@ -169,7 +184,7 @@ We have already followed these instructions and installed the kernels.
    `find /lib/modules/5.11.0<version> -iname "*.ko" -exec strip --strip-unneeded {} +`
 5. Install kernel and update grub `make install`
 
-### Testing and running artefact
+### Testing and running artifact
 
 In this tutorial, we will guide you through running the Midas kernel,
 and provided related information.
@@ -194,8 +209,11 @@ baseline kernel.
 2. In the GRUB menu, choose the 'baseline-cve' option.
 3. Log in at the welcome screen
 4. Open a terminal and run `~/scripts/run_cve_exploit.sh`.
-5. Run `sudo dmesg` and check the output
-6. Check that the output contains "Triggered bug: CVE-2016-6516!"
+   This can take a few minutes.
+5. At the same time, run `watch -n1 'dmesg'` as root and check the output
+6. Check that the output contains "Triggered bug: CVE-2016-6516!".
+   Usually, you should see the first trigger message within a few seconds.
+   A run usually also prints this message around 10 times.
 
 Next, test the Midas kernel. Follow steps 1-5, changing step 2
 to choose the 'midas-cve' option.
@@ -204,6 +222,9 @@ In step 6, the bug trigger message should be absent from the output.
 #### Microbenchmarks
 
 Running these benchmarks is meaningful only on real hardware, not in a VM.
+
+> Note: We use the OSBench version available with Phoronix, since it 
+  provides us an easy interface to see and compare test results.
 
 You will need to repeat the following steps for the baseline kernel, and
 for the midas kernel.
@@ -215,10 +236,14 @@ each workload.
 2. In the GRUB menu, choose the `baseline` or `midas` option.
 3. Log in at the welcome screen
 4. Open a terminal and run `~/scripts/run_ubench.sh`.
+5. Choose option 6 to run all tests when prompted.
+6. Optionally, follow the prompts to save the test results to file.
+   Results are stored in `~/.phoronix-test-suite/test-results`.
 
 The OSBench microbenchmarks are nicely packaged into a OpenBenchmarks
 workload on Phoronix.
 The microbenchmark will print their results to the terminal.
+Make a note of the results, to be able to compare between runs.
 
 #### Phoronix Test Suite benchmarks
 
@@ -235,10 +260,10 @@ a run, and for others it reports operations per unit time
 2. In the GRUB menu, choose the `baseline` or `midas` option.
 3. Log in at the welcome screen
 4. Open a terminal and run `~/scripts/run_phoronix.sh`.
-5. Optionally, choose to save the results to a file
-6. Provide the below options when prompted for:
+5. Provide the below options when prompted for:
     - For Redis choose options 1,2
     - For IPC, choose option 4 then option 1
+6. Optionally, follow the prompts to save the test results to file.
 
 Phoronix will print the benchmark results to the terminal.
 
@@ -257,3 +282,6 @@ The benchmarks report performance as Mop/s for each workload.
 4. Open a terminal and run `~/scripts/run_npb.sh`.
 
 NPB will print the benchmark results to the terminal.
+
+### Known bugs/pitfalls
+
