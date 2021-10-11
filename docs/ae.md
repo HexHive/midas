@@ -11,7 +11,7 @@ the Midas kernel on either a real machine, or on QEMU.
 
 <p>
 Download the compressed disk image
-<a href="https://zenodo.org/record/5555863">here.</a>
+<a href="https://zenodo.org/record/5562505">here.</a>
 </p>
 </div>
 </div>
