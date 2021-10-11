@@ -210,7 +210,7 @@ baseline kernel.
 3. Log in at the welcome screen
 4. Open a terminal and run `~/scripts/run_cve_exploit.sh`.
    This can take a few minutes.
-5. At the same time, run `watch -n1 'dmesg'` as root and check the output
+5. At the same time, run `watch -n1 'sudo dmesg | tail'` and check the output
 6. Check that the output contains "Triggered bug: CVE-2016-6516!".
    Usually, you should see the first trigger message within a few seconds.
    A run usually also prints this message around 10 times.
