@@ -317,9 +317,13 @@ and set up the test files.
 - Note that the config specifies `/etc/nginx/html` as the directory
   holding the html files to serve.
   Create files of size 20B, 50B, 100B, 200B, 500B, 1000B, 2000B, 5000B
-  and 10000B in this folder by running:
-  `for len in {20,50,100,200,500,1000,2000,5000,10000} ; do dd if=/dev/zero of=/etc/nginx/html/$len.html bs=1 count=$len ; done`.
+  and 10000B in this folder by running the following command.
   We will fetch these files during testing.
+
+```
+for len in {20,50,100,200,500,1000,2000,5000,10000} ; do dd if=/dev/zero of=/etc/nginx/html/$len.html bs=1 count=$len ; done
+```
+  
 
 ```
 worker_processes  1;
@@ -347,16 +351,20 @@ http {
 ```
 
 To run the test, first set the number of worker processes to 1 in 
-the config file, then run the load generator with the command:
-`for len in {20,50,100,200,500,1000,2000,5000,10000} ; do ./bombardier-<version> -c 100 -d 30s <server-machine IP>:8088/$len.html ; done`
+the config file, then run the load generator with the following command.
 In this command, make sure to put the correct name of the `bombardier`
 executable, and the server-machine's IP address.
 Note the port number `8088` is set in the server's configuration.
 This command will print the request-per-second and throughput statistic
 to the terminal.
 
-Repeat the above experiment after setting the number of worker 
+```
+for len in {20,50,100,200,500,1000,2000,5000,10000} ; do ./bombardier-<version> -c 100 -d 30s <server-machine IP>:8088/$len.html ; done
+```
+
+Repeat the above experiment after setting the number of worker
 processes in the config file to the number of cores on the server-machine.
+Remember to reload Nginx with the new configuration.
 
 ### Known bugs/pitfalls
 
