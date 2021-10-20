@@ -283,5 +283,99 @@ The benchmarks report performance as Mop/s for each workload.
 
 NPB will print the benchmark results to the terminal.
 
+#### Nginx case stude
+
+To recreate the case-study with Nginx, you will need a
+second machine (hereafter called load-generator) connected to the
+`midas` machine (hereafter called server-machine).
+The Nginx webserver will run on the `midas` machine, and is already
+installed on the image (v1.18).
+Connect the load-generator to the server-machine with a ethernet
+connection.
+For consistency with the paper, a 1Gbps wired ethernet connection
+is preferred.
+Make sure that the machines each have an IP address allocated, and
+that they can communicate.
+
+We assume that the load-generator is running a linux-based OS, but
+it is not necessary.
+We can download the load-generating program `bombardier` from its
+<a href="https://github.com/codesenberg/bombardier/releases">GitHub page .</a>
+Download the version relevant for this machine's OS and architecture.
+Make the file executable by running `chmod u+x bombardier-<version>`.
+
+To prepare the server-machine, we need to correctly configure Nginx
+and set up the test files.
+
+- We can configure Nginx by updating the file `/etc/nginx/nginx.conf`.
+  We change the contents of the config file to that shown below.
+  Note that the config currently specifies that `nginx` uses one worker.
+  As per the experiment, change this number to the number of cores on
+  your server-machine.
+  To run `nginx` with this configuration, restart the server by running
+  `sudo nginx -s reload`.
+- Note that the config specifies `/etc/nginx/html` as the directory
+  holding the html files to serve.
+  Create files of size 20B, 50B, 100B, 200B, 500B, 1000B, 2000B, 5000B
+  and 10000B in this folder by running:
+  `for len in {20,50,100,200,500,1000,2000,5000,10000} ; do dd if=/dev/zero of=/etc/nginx/html/$len.html bs=1 count=$len ; done`.
+  We will fetch these files during testing.
+
+```
+worker_processes  1;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+
+    server {
+        listen       8088;
+        server_name  localhost;
+
+        location / {
+            root   /etc/nginx/html;
+            index  index.html index.htm;
+        }
+    }
+}
+```
+
+To run the test, first set the number of worker processes to 1 in 
+the config file, then run the load generator with the command:
+`for len in {20,50,100,200,500,1000,2000,5000,10000} ; do ./bombardier-<version> -c 100 -d 30s <server-machine IP>:8088/$len.html ; done`
+In this command, make sure to put the correct name of the `bombardier`
+executable, and the server-machine's IP address.
+Note the port number `8088` is set in the server's configuration.
+This command will print the request-per-second and throughput statistic
+to the terminal.
+
+Repeat the above experiment after setting the number of worker 
+processes in the config file to the number of cores on the server-machine.
+
 ### Known bugs/pitfalls
 
+- An occasional bug leads to lingering protections on a page.
+  This triggers a check in `midas`'s code.
+  The kernel logs will contain the following lines.
+  Restart the machine when you encounter this bug.
+
+```
+[  sss.uuuuuu] ------------[ cut here ]------------
+[  sss.uuuuuu] kernel BUG at arch/x86/kernel/uaccess.c:173!
+...
+[  sss.uuuuuu] RIP: 0010:page_unmark_one+0xe1/0xf0
+```
+
+- The kernel might occasionally hang on a spinlock.
+  The kernel logs contain the following message.
+  Restart the machine when you encounter this bug.
+
+```
+BUG: soft lockup - CPU#xx stuck for xxs! 
+```
