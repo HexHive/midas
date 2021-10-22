@@ -300,13 +300,14 @@ unsigned long mark_and_read_subpage(uintptr_t id, unsigned long dst, unsigned lo
                 copy_vaddr = &sysc_snap->copy->data;
 
         }
-        mutex_unlock(&pframe->snaps_lock);
-        mutex_unlock(&current->markings_lock);
 
         BUG_ON(copy_vaddr == NULL);
         src = (uintptr_t)copy_vaddr + (src & ~PAGE_MASK);
 
         ret = __raw_copy_from_user((void *)dst, (const void *)src, size);
+        
+        mutex_unlock(&pframe->snaps_lock);
+        mutex_unlock(&current->markings_lock);
         return ret;
     }
 
