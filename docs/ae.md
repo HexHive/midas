@@ -196,6 +196,23 @@ The following experiments are described:
 - How to run the NPB reported in the paper
 - How to run the Phoronix Test Suite benchmarks reported in the paper
 
+There is a faster, almost push-button way to run the performance benchmarks.
+The steps to do so are:
+
+1. Restart the machine
+2. In the GRUB menu, choose the `baseline` option.
+3. Run all benchmarks by running the script 
+   `~/scripts/run_all_benchmarks.sh baselog`. 
+   The first argument `baselog` specifies the file where the results of 
+   the run is stored.
+4. Restart the machine, this time choosing the `midas` option.
+5. Run the benchmarks again, but specify a different log-file name.
+   `~/scripts/run_all_benchmarks.sh midaslog`.
+6. Now run the script to plot the relative performance of `midas` compared
+   to the baseline: `~/scripts/generate_graphs.py baselog midaslog`.
+   Note how we provide the log files from the two runs. This script outputs
+   Figure 9 from the paper, storing it in `midas_performance.pdf`.
+   
 #### Testing protection against CVE-2016-6516
 
 We demonstrate how the baseline kernel is vulnerable to this
