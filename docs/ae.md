@@ -11,7 +11,7 @@ the Midas kernel on either a real machine, or on QEMU.
 
 <p>
 Download the compressed disk image
-<a href="https://zenodo.org/record/5562505">here.</a>
+<a href="https://zenodo.org/record/5753026">here.</a>
 </p>
 </div>
 </div>
@@ -300,7 +300,7 @@ The benchmarks report performance as Mop/s for each workload.
 
 NPB will print the benchmark results to the terminal.
 
-#### Nginx case stude
+#### Nginx case study
 
 To recreate the case-study with Nginx, you will need a
 second machine (hereafter called load-generator) connected to the
